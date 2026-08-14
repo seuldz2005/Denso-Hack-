@@ -1,65 +1,45 @@
 #+title: Pipeline for Deso Hack
 
 * Diagram
-#+begin_src mermaid
+#+BEGIN_SRC mermaid :file my-diagram.png
 flowchart TD
-    %% Đây là comment trong Mermaid (sẽ không hiển thị)
+    In["Incoming Data\n(fleet size / history length)"] -->|assess| Cond{"Enough fleet + history?"}
 
-    Start(Bắt đầu) --> Input[/Nhập ma trận/]
-    Input --> Check{Kiểm tra định dạng}
+    Cond -->|not enough| AE
+    Cond -->|enough| CLF
 
-    Check -->|Hợp lệ| Process[Chạy thuật toán Jacobi]
-    Check -->|Lỗi| Error[Báo lỗi Dữ liệu]
+    subgraph Phase1 [Phase I — Cold-start]
+        direction TB
+        AE["Autoencoder\n(train on healthy window only)"] --> RE["Reconstruction Error\n(anomaly score)"]
+        RE -->|adjust threshold| DP["Degradation Point\n(threshold adjustment)"]
+        DP --> Val1{"Validate"}
+        Val1 -->|real DENSO data| Real["Real deployment:\nonly reconstruction error\n(no ground truth)"]
+        Val1 -->|synthetic data| CMAPSS["On C-MAPSS:\ncorrelate error vs.\nknown Real RUL"]
+    end
 
-    Process -.-> DB[(Lưu kết quả ngầm)]
-    Process ==> Output[/Xuất mảng NumPy/]
+    subgraph Phase2 [Phase II — Mature data]
+        direction TB
+        CLF["Custom Loss Function\n(LSTM / GRU)"]
 
-    Error --> End((Kết thúc))
-    Output --> End
+        CLF -->|labeling target| MFPCA["MFPCA + GMM + Youden"]
+        CLF -->|physical constraint| Mono["Monotonicity Regularizer"]
+        CLF -->|censoring-aware loss| Haz["Discrete-time Hazard\n(degradation-only data)"]
 
-#+end_src
+        MFPCA --> Val2{"Validate"}
+        Mono --> Val2
+        Haz --> Val2
 
+        Val2 --> Metrics["C-index, IBS,\nCalibration plot"]
+    end
 
-* Brain Storm Section
-** Custom loss function
-*** Discrete-time Hazard
-- is basically *Probability*
-- has different loss function :
-  $$\text{Loss}_{t} = -[y_{t}log(\hat{y_{t}})+(1-y_{t})log(1-\hat{y_{t}})] $$
-- *answer : how is the result of guessing which unit will break first*
-*** Monotonicity Regularizer (Ham rang buoc don dieu)
-- basically to make sure the percantage of the engine which will broken down can
-  decrease ... (ban chat chung phai tuyen tinh tang len)
-** Autoencoder
-- its purpose is to find anomaly in health phase
-- so it can also help us to revaluate the degradation point instead of using
-  130 - fixed point like my previous plan, also we can use this as a transition
-  point to use phase II
+    DP -.->|transition once\nfleet/history accumulates| CLF
+#+END_SRC
 
-* How to evaluate our model
-- Include C-index, IBS, Calibration and it is completely different from RMSE
-** Concordance Index (C-index)
-- đây là chỉ số quan trọng nhất, tương đương AUC nhưng cho dữ liệu
-  survival/censored. Nó đo: trong mọi cặp máy (i, j) mà bạn biết chắc máy nào
-  "hỏng trước" (kể cả khi một trong hai bị censor, miễn còn so sánh được), mô
-  hình có xếp hạng đúng thứ tự rủi ro không? C-index = 0.5 là đoán ngẫu nhiên,
-  1.0 là hoàn hảo. Đây là chỉ số bạn nên báo cáo làm "con số chính" thay thế vai
-  trò của RMSE trước đây, vì nó đánh giá đúng bản chất bài toán bạn đang giải
-  (xếp hạng rủi ro tương đối), không đòi hỏi biết chính xác RUL của từng máy
-  censored.
-** Time-dependent Brier Score / Integrated Brier Score (IBS)
-- đây là thứ gần với "MSE cho xác suất": tại mỗi mốc thời gian t, so sánh xác
-  suất dự đoán với outcome thực tế (đã xảy ra sự kiện hay chưa), có điều chỉnh
-  trọng số cho dữ liệu censored (IPCW). IBS lấy tích phân Brier score qua toàn
-  bộ khoảng thời gian quan sát thành một con số duy nhất — cho bạn biết mô hình
-  có hiệu chỉnh tốt không (calibration), bổ sung cho C-index vốn chỉ đo thứ hạng
-  chứ không đo độ chính xác xác suất tuyệt đối.
-** Calibration plot
-- vẽ xác suất dự đoán "sẽ cần bảo trì trong X cycle tới" so với tần suất thực tế
-  quan sát được trong nhóm đó. Đây là biểu đồ trực quan rất tốt để demo — dễ
-  giải thích cho ban giám khảo hơn nhiều so với con số C-index trừu tượng.
+#+RESULTS:
+[[file:my-diagram.png]]
 
 * Reality Facts
+
 ** The data is not that beautiful ...
 - In reality, we can't just let the machine broken down just to get the data but
   always fix it after some degree of degradation signals
@@ -68,6 +48,44 @@ flowchart TD
 - One more thing is that if we have a new machine and get it into work. We can't
   just have all of it data immediately ...
 - That's why we should consider this aspect
+* Brain Storm Section
+** Custom loss function
+*** Discrete-time Hazard
+- is basically *Probability*
+- has different loss function :
+$$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
+*** Monotonicity Regularizer (Ham rang buoc don dieu)
+- basically to make sure the percantage of the engine which will broken down can
+  decrease ... (ban chat chung phai tuyen tinh tang len)
+** Autoencoder
+- its purpose is to find anomaly in health phase
+- so it can also help us to revaluate the degradation point instead of using
+  130 - fixed point like my previous plan, also we can use this as a transition
+  point to use phase II
+* How to evaluate our model
+- Include C-index, IBS, Calibration and it is completely different from RMSE
+** Labeling + LSTM
+*** Concordance Index (C-index)
+- đây là chỉ số quan trọng nhất, tương đương AUC nhưng cho dữ liệu
+  survival/censored. Nó đo: trong mọi cặp máy (i, j) mà bạn biết chắc máy nào
+  "hỏng trước" (kể cả khi một trong hai bị censor, miễn còn so sánh được), mô
+  hình có xếp hạng đúng thứ tự rủi ro không? C-index = 0.5 là đoán ngẫu nhiên,
+  1.0 là hoàn hảo. Đây là chỉ số bạn nên báo cáo làm "con số chính" thay thế vai
+  trò của RMSE trước đây, vì nó đánh giá đúng bản chất bài toán bạn đang giải
+  (xếp hạng rủi ro tương đối), không đòi hỏi biết chính xác RUL của từng máy
+  censored.
+*** Time-dependent Brier Score / Integrated Brier Score (IBS)
+- đây là thứ gần với "MSE cho xác suất": tại mỗi mốc thời gian t, so sánh xác
+  suất dự đoán với outcome thực tế (đã xảy ra sự kiện hay chưa), có điều chỉnh
+  trọng số cho dữ liệu censored (IPCW). IBS lấy tích phân Brier score qua toàn
+  bộ khoảng thời gian quan sát thành một con số duy nhất — cho bạn biết mô hình
+  có hiệu chỉnh tốt không (calibration), bổ sung cho C-index vốn chỉ đo thứ hạng
+  chứ không đo độ chính xác xác suất tuyệt đối.
+*** Calibration plot
+- vẽ xác suất dự đoán "sẽ cần bảo trì trong X cycle tới" so với tần suất thực tế
+  quan sát được trong nhóm đó. Đây là biểu đồ trực quan rất tốt để demo — dễ
+  giải thích cho ban giám khảo hơn nhiều so với con số C-index trừu tượng.
+
 * Phase Description
 Ta sẽ có 2 phase, khi data vẫn còn ít, ta sẽ sử dụng autoencoder nhằm phát
 hiện bất thường, vì là thời điểm healthy phase nên việc sử dụng chúng chỉ nhằm
@@ -75,7 +93,58 @@ mục tiêu đảm bảo trường hợp xấu nhất (rất khó xảy ra). Khi
 nhất định, ta sẽ sử dụng pipeline : MFPCA + GMM + Youden index -> label, và sử
 dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
 
-* Suggest Demo
+* Suggestion
+** Problem statement
+- Tham dự triển lãm Intelligent Asia Hanoi 2026 và các phiên talkshow chuyên đề
+  về chuyển đổi số trong sản xuất, chúng tôi nhận thấy Việt Nam đang bước vào
+  giai đoạn chuyển dịch mạnh mẽ hướng tới Smart Manufacturing, được thúc đẩy bởi
+  loạt chính sách hỗ trợ từ Nhà nước dành cho doanh nghiệp và các cơ sở nghiên
+  cứu. Trong bối cảnh đó, việc đầu tư máy móc nhập khẩu — vốn có chi phí lớn và
+  thời gian khấu hao dài — đang được khuyến khích như một bước đi tất yếu để
+  nâng cao năng lực sản xuất. Tuy nhiên, đi kèm với làn sóng đầu tư này là một
+  khoảng trống đáng lo ngại: phần lớn các nhà cung cấp cấp 2, cấp 3 trong chuỗi
+  cung ứng — nơi vận hành song song nhiều máy móc cùng loại nhưng lại có ngân
+  sách và nhân lực kỹ thuật hạn chế — không có khả năng tiếp cận các công cụ
+  đánh giá độ bền/dự đoán tuổi thọ (RUL) đi kèm, vốn thường bị khóa trong hệ
+  sinh thái độc quyền và chi phí cao của chính hãng sản xuất máy. Tình trạng này
+  càng trở nên cấp thiết khi nhiều khu công nghiệp hiện vẫn phụ thuộc phần lớn
+  vào giám sát thủ công bằng con người — vừa tốn kém nhân lực, vừa thiếu nhất
+  quán và không thể phát hiện sớm các dấu hiệu suy thoái tiềm ẩn. Nhu cầu về một
+  giải pháp đánh giá sức khỏe/tuổi thọ máy móc — độc lập với hãng sản xuất, phù
+  hợp với năng lực dữ liệu thực tế và chi phí vận hành của nhóm doanh nghiệp này
+  — do đó không còn là câu hỏi "có cần không", mà chỉ còn là vấn đề thời gian
+  trước khi nó trở thành một yêu cầu bắt buộc trong chuỗi cung ứng công nghiệp
+  4.0. Xuất phát từ thực trạng đó, chúng tôi đề xuất...
+** Demo
 - At the overlap range of 2 main phase, we can check if the anomaly are provided
   the same between these 2 phase.
 -
+Team information — gắn với năng lực đã chứng minhKhông chỉ tên/trường — nêu rõ
+vì sao đội bạn phù hợp với chính bài toán này: bạn đã có RMSE 15.7 trên C-MAPSS,
+đã tham dự Intelligent Asia Hanoi, hiểu văn hóa TPM. Đây là slide tạo niềm tin
+ngay từ đầu, không phải thủ tục.
+2
+Problem statement and background — rút gọn thành 1 slide cốt lõiDùng đoạn dẫn
+dắt đã viết (Intelligent Asia → chính sách Smart Manufacturing → khoảng trống
+OEM khóa vendor → Tier 2/3 thiếu công cụ), nhưng rút gọn còn 3-4 câu trên slide,
+phần diễn giải đầy đủ để vào speaker note nếu template có chỗ đó. Thêm 1 số liệu
+thịnh (ví dụ chi phí IIoT trung bình cho SME) để tăng sức nặng.
+3
+Market analysis — so sánh trực tiếp với giải pháp hiện cóĐặt sản phẩm bạn bên
+cạnh Augury/SKF/Factory AI trong một bảng so sánh ngắn: họ đắt + khóa vendor,
+bạn rẻ + sensor-agnostic + nhẹ cho Tier 2/3. Đây là slide dễ gây ấn tượng nhất
+vì cho thấy bạn hiểu thị trường thật, không chỉ hiểu thuật toán.
+4
+Technical design — trục chiều là sơ đồ pipelineĐây là phần nặng nhất — dùng
+chính sơ đồ pipeline vừa hoàn thiện làm hero visual của toàn bộ deck. Một slide
+cho toàn cảnh, sau đó tách riêng 1-2 slide zoom vào Phase I (autoencoder) và
+Phase II (MFPCA/hazard) với giải thích ngắn mỗi phần làm gì, tại sao cần.
+5
+Objectives and expected impact — gắn với mốc cụ thểNêu rõ cụ thể sẽ làm gì nếu
+được chọn vào top 10/top 5: ví dụ áp dụng pipeline lên dữ liệu thật từ Factory
+Tour, đo C-index/IBS cụ thể, xây demo dashboard. Tránh chung chung kiểu "cải
+thiện hiệu suất sản xuất" — càng đo đếm được càng tốt.
+6
+Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu kết
+nối trực tiếp với tên chủ đề "Predictive & Knowledge AI" — tránh để giám khảo tự
+suy ra, nêu thẳng.
