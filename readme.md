@@ -1,40 +1,48 @@
 
 # Table of Contents
 
-1.  [Diagram](#org7fd77f4)
-2.  [Reality Facts](#org8126fd7)
-    1.  [The data is not that beautiful &hellip;](#orgfff59d1)
-    2.  [The data isn&rsquo;t avaiable](#orgcbb7ccf)
-3.  [Brain Storm Section](#org495969d)
-    1.  [Custom loss function](#org9888441)
-        1.  [Discrete-time Hazard](#orgf014f3b)
-        2.  [Monotonicity Regularizer (Ham rang buoc don dieu)](#orga15c7a2)
-    2.  [Autoencoder](#org95bea48)
-4.  [How to evaluate our model](#org20a229f)
-    1.  [Labeling + LSTM](#org7e8cc7c)
-        1.  [Concordance Index (C-index)](#orgff3e2e5)
-        2.  [Time-dependent Brier Score / Integrated Brier Score (IBS)](#orge81c0b1)
-        3.  [Calibration plot](#org69a604a)
-5.  [Phase Description](#orgea8fa87)
-6.  [Suggestion](#org7885a49)
-    1.  [Problem statement](#org3a67d22)
-    2.  [Demo](#org0c2e9f7)
+1.  [Diagram](#orge356558)
+2.  [Reality Facts](#org130829a)
+    1.  [The data is not that beautiful &hellip;](#orgbf765ea)
+    2.  [The data isn&rsquo;t avaiable](#org1b78042)
+    3.  [The engine won&rsquo;t work in sync](#org58ce1cd)
+3.  [Brain Storm Section](#org0825ae2)
+    1.  [Custom loss function](#org2e41b5d)
+        1.  [Discrete-time Hazard](#org00b78d6)
+        2.  [Monotonicity Regularizer (Ham rang buoc don dieu)](#org6c1945d)
+    2.  [Autoencoder](#org9febb64)
+4.  [How to evaluate our model](#org20c7494)
+    1.  [Labeling + LSTM](#orge1359dd)
+        1.  [Concordance Index (C-index)](#org1552c1b)
+        2.  [Time-dependent Brier Score / Integrated Brier Score (IBS)](#orgf2c569f)
+        3.  [Calibration plot](#orgb520c22)
+5.  [Phase Description](#orgb34c958)
+6.  [Suggestion](#orgda590a4)
+    1.  [Problem statement](#org57ec494)
+    2.  [Demo](#org0c40576)
+    3.  [Preview](#orgeaf3407)
+    4.  [Asignment](#org4947e9e)
+7.  [Potential Question](#orga099ae8)
+    1.  [Why for Tier 2/3](#org3ace2b9)
+    2.  [What is the reason for Phase II?](#org151fd46)
+    3.  [Why not using RMSE for validate check?](#org57fe78f)
+    4.  [Do we need to start all the engine at the same time?](#orge90ae48)
 
 
 
-<a id="org7fd77f4"></a>
+<a id="orge356558"></a>
 
 # Diagram
 
 ![img](my-diagram.png)
 
 
-<a id="org8126fd7"></a>
+<a id="org130829a"></a>
 
 # Reality Facts
 
 
-<a id="orgfff59d1"></a>
+<a id="orgbf765ea"></a>
 
 ## The data is not that beautiful &hellip;
 
@@ -43,7 +51,7 @@
 -   Therefore, we need to consider that our data will always contain mostly **health phase**
 
 
-<a id="orgcbb7ccf"></a>
+<a id="org1b78042"></a>
 
 ## The data isn&rsquo;t avaiable
 
@@ -52,17 +60,24 @@
 -   That&rsquo;s why we should consider this aspect
 
 
-<a id="org495969d"></a>
+<a id="org58ce1cd"></a>
+
+## The engine won&rsquo;t work in sync
+
+-   We should consider that all the engines should work in different term of its
+
+
+<a id="org0825ae2"></a>
 
 # Brain Storm Section
 
 
-<a id="org9888441"></a>
+<a id="org2e41b5d"></a>
 
 ## Custom loss function
 
 
-<a id="orgf014f3b"></a>
+<a id="org00b78d6"></a>
 
 ### Discrete-time Hazard
 
@@ -72,7 +87,7 @@
 $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
 
 
-<a id="orga15c7a2"></a>
+<a id="org6c1945d"></a>
 
 ### Monotonicity Regularizer (Ham rang buoc don dieu)
 
@@ -80,7 +95,7 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
     decrease &hellip; (ban chat chung phai tuyen tinh tang len)
 
 
-<a id="org95bea48"></a>
+<a id="org9febb64"></a>
 
 ## Autoencoder
 
@@ -90,19 +105,19 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
     point to use phase II
 
 
-<a id="org20a229f"></a>
+<a id="org20c7494"></a>
 
 # How to evaluate our model
 
 -   Include C-index, IBS, Calibration and it is completely different from RMSE
 
 
-<a id="org7e8cc7c"></a>
+<a id="orge1359dd"></a>
 
 ## Labeling + LSTM
 
 
-<a id="orgff3e2e5"></a>
+<a id="org1552c1b"></a>
 
 ### Concordance Index (C-index)
 
@@ -116,7 +131,7 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
     censored.
 
 
-<a id="orge81c0b1"></a>
+<a id="orgf2c569f"></a>
 
 ### Time-dependent Brier Score / Integrated Brier Score (IBS)
 
@@ -128,7 +143,7 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
     chứ không đo độ chính xác xác suất tuyệt đối.
 
 
-<a id="org69a604a"></a>
+<a id="orgb520c22"></a>
 
 ### Calibration plot
 
@@ -137,7 +152,7 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
     giải thích cho ban giám khảo hơn nhiều so với con số C-index trừu tượng.
 
 
-<a id="orgea8fa87"></a>
+<a id="orgb34c958"></a>
 
 # Phase Description
 
@@ -148,12 +163,12 @@ nhất định, ta sẽ sử dụng pipeline : MFPCA + GMM + Youden index -> lab
 dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
 
 
-<a id="org7885a49"></a>
+<a id="orgda590a4"></a>
 
 # Suggestion
 
 
-<a id="org3a67d22"></a>
+<a id="org57ec494"></a>
 
 ## Problem statement
 
@@ -179,41 +194,98 @@ dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
     4.0. Xuất phát từ thực trạng đó, chúng tôi đề xuất&hellip;
 
 
-<a id="org0c2e9f7"></a>
+<a id="org0c40576"></a>
 
 ## Demo
 
 -   At the overlap range of 2 main phase, we can check if the anomaly are provided
     the same between these 2 phase.
--   
 
-Team information — gắn với năng lực đã chứng minhKhông chỉ tên/trường — nêu rõ
-vì sao đội bạn phù hợp với chính bài toán này: bạn đã có RMSE 15.7 trên C-MAPSS,
-đã tham dự Intelligent Asia Hanoi, hiểu văn hóa TPM. Đây là slide tạo niềm tin
-ngay từ đầu, không phải thủ tục.
-2
-Problem statement and background — rút gọn thành 1 slide cốt lõiDùng đoạn dẫn
-dắt đã viết (Intelligent Asia → chính sách Smart Manufacturing → khoảng trống
-OEM khóa vendor → Tier 2/3 thiếu công cụ), nhưng rút gọn còn 3-4 câu trên slide,
-phần diễn giải đầy đủ để vào speaker note nếu template có chỗ đó. Thêm 1 số liệu
-thịnh (ví dụ chi phí IIoT trung bình cho SME) để tăng sức nặng.
-3
-Market analysis — so sánh trực tiếp với giải pháp hiện cóĐặt sản phẩm bạn bên
-cạnh Augury/SKF/Factory AI trong một bảng so sánh ngắn: họ đắt + khóa vendor,
-bạn rẻ + sensor-agnostic + nhẹ cho Tier 2/3. Đây là slide dễ gây ấn tượng nhất
-vì cho thấy bạn hiểu thị trường thật, không chỉ hiểu thuật toán.
-4
-Technical design — trục chiều là sơ đồ pipelineĐây là phần nặng nhất — dùng
-chính sơ đồ pipeline vừa hoàn thiện làm hero visual của toàn bộ deck. Một slide
-cho toàn cảnh, sau đó tách riêng 1-2 slide zoom vào Phase I (autoencoder) và
-Phase II (MFPCA/hazard) với giải thích ngắn mỗi phần làm gì, tại sao cần.
-5
-Objectives and expected impact — gắn với mốc cụ thểNêu rõ cụ thể sẽ làm gì nếu
-được chọn vào top 10/top 5: ví dụ áp dụng pipeline lên dữ liệu thật từ Factory
-Tour, đo C-index/IBS cụ thể, xây demo dashboard. Tránh chung chung kiểu &ldquo;cải
-thiện hiệu suất sản xuất&rdquo; — càng đo đếm được càng tốt.
-6
-Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu kết
-nối trực tiếp với tên chủ đề &ldquo;Predictive & Knowledge AI&rdquo; — tránh để giám khảo tự
-suy ra, nêu thẳng.
+
+<a id="orgeaf3407"></a>
+
+## Preview
+
+-   Team information — gắn với năng lực đã chứng minh Không chỉ tên/trường — nêu
+    rõ vì sao đội bạn phù hợp với chính bài toán này: bạn đã có RMSE 15.7 trên
+    C-MAPSS, đã tham dự Intelligent Asia Hanoi, hiểu văn hóa TPM. Đây là slide tạo
+    niềm tin ngay từ đầu, không phải thủ tục.
+-   Problem statement and background — rút gọn thành 1 slide cốt lõi. Dùng đoạn
+    dẫn dắt đã viết (Intelligent Asia → chính sách Smart Manufacturing → khoảng
+    trống OEM khóa vendor → Tier 2/3 thiếu công cụ), nhưng rút gọn còn 3-4 câu
+    trên slide, phần diễn giải đầy đủ để vào speaker note nếu template có chỗ đó.
+    Thêm 1 số liệu thịnh (ví dụ chi phí IIoT trung bình cho SME) để tăng sức nặng.
+-   Market analysis — so sánh trực tiếp với giải pháp hiện có. Đặt sản phẩm bạn
+    bên cạnh Augury/SKF/Factory AI trong một bảng so sánh ngắn: họ đắt + khóa
+    vendor, bạn rẻ + sensor-agnostic + nhẹ cho [Tier 2/3](#org3ace2b9). Đây là slide dễ gây ấn
+    tượng nhất vì cho thấy bạn hiểu thị trường thật, không chỉ hiểu thuật toán.
+-   Technical design — trục chiều là sơ đồ pipelineĐây là phần nặng nhất — dùng
+    chính sơ đồ pipeline vừa hoàn thiện làm hero visual của toàn bộ deck. Một
+    slide cho toàn cảnh, sau đó tách riêng 1-2 slide zoom vào Phase I
+    (autoencoder) và Phase II (MFPCA/hazard) với giải thích ngắn mỗi phần làm gì,
+    tại sao cần.
+-   Objectives and expected impact — gắn với mốc cụ thểNêu rõ cụ thể sẽ làm gì nếu
+    được chọn vào top 10/top 5: ví dụ áp dụng pipeline lên dữ liệu thật từ Factory
+    Tour, đo C-index/IBS cụ thể, xây demo dashboard. Tránh chung chung kiểu &ldquo;cải
+    thiện hiệu suất sản xuất&rdquo; — càng đo đếm được càng tốt.
+-   Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu
+    kết nối trực tiếp với tên chủ đề &ldquo;Predictive & Knowledge AI&rdquo; — tránh để giám
+    khảo tự suy ra, nêu thẳng.
+
+
+<a id="org4947e9e"></a>
+
+## Asignment
+
+-   Bạn — Phase 2 (MFPCA/GMM/hazard-LSTM), như đã định.
+-   Người 2 — Phase 1 (autoencoder), như đã định.
+-   Người 3 — thay vì &ldquo;quản lý transition + draft pitch&rdquo;, nên là chủ trì phần đánh
+    giá & tích hợp xuyên suốt cả hai phase: xây bộ harness đo lường (Spearman
+    correlation cho AE, C-index/IBS/calibration cho Phase 2, multi-seed
+    evaluation), và cùng bạn với người 2 thống nhất tiêu chí PhaseCheck (dựa trên
+    số liệu thực nghiệm hai người kia cung cấp, không tự quyết một mình). Đây là
+    việc rất dễ bị bỏ quên vì cả hai người làm model đều sẽ mải tối ưu phần riêng
+    của mình — nếu không ai chuyên trách, phần &ldquo;hai module có thực sự ăn khớp với
+    nhau không&rdquo; dễ chỉ được kiểm tra vội vào phút cuối.
+
+
+<a id="orga099ae8"></a>
+
+# Potential Question
+
+
+<a id="org3ace2b9"></a>
+
+## Why for Tier 2/3
+
+
+<a id="org151fd46"></a>
+
+## What is the reason for Phase II?
+
+-   2 different for 2 phase :
+-   AE will answer for the question about anomaly and when does it start?
+-   While phase II will answer for the question : which engine need to maintain
+    first (priority)
+
+-   Một điểm tôi khuyên bạn thành thật thừa nhận thay vì né tránh — vì nó thực ra
+    làm lập luận của bạn mạnh hơn: đúng là có trường hợp Phase II không cần thiết
+    — nếu máy đó rẻ, hậu quả hỏng thấp, chi phí kiểm tra thủ công thấp, thì cứ có
+    cảnh báo từ AE là đủ, không cần đầu tư thêm phân tích sâu. Việc bạn chủ động
+    nói ra ranh giới này (&ldquo;Phase II chỉ đáng đầu tư cho máy/dây chuyền có giá trị
+    cao hoặc hậu quả hỏng nghiêm trọng — đúng kiểu máy nhập khẩu đắt tiền mà đề
+    xuất ban đầu của bạn đang nhắm tới&rdquo;) sẽ cho ban giám khảo thấy bạn hiểu rõ
+    trade-off chi phí-lợi ích của chính hệ thống mình đề xuất, không chỉ cố bán
+    &ldquo;càng nhiều mô hình càng tốt&rdquo; — đây chính xác là điều phân biệt một đề xuất kỹ
+    thuật trưởng thành với một đề xuất chỉ đang khoe số lượng thuật toán.
+
+
+<a id="org57fe78f"></a>
+
+## Why not using RMSE for validate check?
+
+
+<a id="orge90ae48"></a>
+
+## Do we need to start all the engine at the same time?
 
