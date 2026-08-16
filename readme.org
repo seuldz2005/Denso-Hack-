@@ -50,7 +50,8 @@ flowchart TD
 - That's why we should consider this aspect
 ** The engine won't work in sync
 - We should consider that all the engines should work in different term of its
-
+** Recored data maybe not in the right shape
+- The data maybe provide at form of minute, second ...
 * Potential Question
 ** Why for Tier 2/3
 :PROPERTIES:
@@ -76,7 +77,7 @@ flowchart TD
 ** Why not using RMSE for validate check?
 ** Do we need to start all the engine at the same time?
 * Brain Storm Section
-** Phase I : Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]]
+** Phase I : Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
 *** Purpose
 - Focus more on one unit
 - its purpose is to find anomaly in health phase
@@ -99,14 +100,26 @@ flowchart TD
 - Recognize if the quantity and quality of current cluster to move on to next phase
 - Is it enough for quantity of engine?
 - Do all of that engine has anomaly detected?
-** Phase II : Hazard ...
+- So basically, if there are 50 engines in the dataset, but only 3 of them are
+  satisfy the requirement, then can we start the phase II?
+- Yes we can because of GRU-hazard was made for that. All of the engine will
+  still go to the phase II, they were all used to learn, if one was short , it
+  was learned short, if one was long, it was learned long. Size is not a
+  problem, as they was just 'knowledge' for the ML to learn. The final result
+  will only be accepted for 3 engines which are satisfy the requirement, the
+  other will be considered as not worth to trust yet, up until they are
+  satisfied. I think, the 3 engines should be evaluated more as the more
+  informations with other engines, the better
+- Also we should consider create a Keeper that should only allow engine which
+  has cycles more than X cycles ... Imagine a cycle with only 3-4 , it won't
+  give us any valuable information ...
+** Phase II : GRU - Hazard
+
 *** Purpose
 - Focus more about a cluster of unit
 - And the output should give us information to evaluate which engine is gonna
   fall down (percentage) and the maintancenent priority
 -
-
-
 *** Custom loss function
 **** Discrete-time Hazard
 - is basically *Probability*
