@@ -1,4 +1,4 @@
-#+title: Pipeline for Deso Hack
+#+title: Dynamic Risk Prognostics / Proportional Hazard Assumption /
 
 * Diagram
 #+BEGIN_SRC mermaid :file my-diagram.png
@@ -38,13 +38,34 @@ flowchart TD
 #+RESULTS:
 [[file:my-diagram.png]]
 
+* Problem Statement
+** Denso's problem
+- So they want us to create something that can generate anomaly data, to balance
+  the data, but the purpose is still : to help the model be more accuracy in
+  disadvantages condition.
+** Analyze their solution
+- Their solution : create a generator that can distribute only possible anomaly,
+  but it still need an amount of real data of that anomaly to actually make it
+  happen. Though they will provide us some, but i think this solution is not good.
+** Our solution
+- Our solution expect the [[id:39cbe103-698a-40f6-b1ec-f81f31628150][disadvantages]] that happen in real life, and should be
+  good enough even with only truncated data, and work in real-time
+- They did also provide 5M1E type of data which mean anomaly data that are
+  verified by human
+- [ ] also they want a recall/F1 before and after (Youden Index)
 * Reality Facts
+:PROPERTIES:
+:ID:       39cbe103-698a-40f6-b1ec-f81f31628150
+:END:
 
 ** The data is not that beautiful ...
 - In reality, we can't just let the machine broken down just to get the data but
   always fix it after some degree of degradation signals
 - Therefore, we need to consider that our data will always contain mostly *health phase*
 ** The data isn't avaiable
+:PROPERTIES:
+:ID:       02d9a1e7-298a-4b19-b436-dbc871a6ed3c
+:END:
 - One more thing is that if we have a new machine and get it into work. We can't
   just have all of it data immediately ...
 - That's why we should consider this aspect
@@ -52,50 +73,13 @@ flowchart TD
 - We should consider that all the engines should work in different term of its
 ** Recored data maybe not in the right shape
 - The data maybe provide at form of minute, second ...
-* Potential Question
-** Why for Tier 2/3
-:PROPERTIES:
-:ID:       7a61a4e5-6162-49f6-981b-9fbf70317a48
-:END:
-
-** What is the reason for Phase II?
-- 2 different for 2 phase :
-- AE will answer for the question about anomaly and when does it start?
-- While phase II will answer for the question : which engine need to maintain
-  first (priority)
-
-- Một điểm tôi khuyên bạn thành thật thừa nhận thay vì né tránh — vì nó thực ra
-  làm lập luận của bạn mạnh hơn: đúng là có trường hợp Phase II không cần thiết
-  — nếu máy đó rẻ, hậu quả hỏng thấp, chi phí kiểm tra thủ công thấp, thì cứ có
-  cảnh báo từ AE là đủ, không cần đầu tư thêm phân tích sâu. Việc bạn chủ động
-  nói ra ranh giới này ("Phase II chỉ đáng đầu tư cho máy/dây chuyền có giá trị
-  cao hoặc hậu quả hỏng nghiêm trọng — đúng kiểu máy nhập khẩu đắt tiền mà đề
-  xuất ban đầu của bạn đang nhắm tới") sẽ cho ban giám khảo thấy bạn hiểu rõ
-  trade-off chi phí-lợi ích của chính hệ thống mình đề xuất, không chỉ cố bán
-  "càng nhiều mô hình càng tốt" — đây chính xác là điều phân biệt một đề xuất kỹ
-  thuật trưởng thành với một đề xuất chỉ đang khoe số lượng thuật toán.
-** Why not using RMSE for validate check?
-** Do we need to start all the engine at the same time?
 * Brain Storm Section
 ** Phase I : Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
 *** Purpose
-- Focus more on one unit
-- its purpose is to find anomaly in health phase
-- Also using the bottleneck to label (optinal)
-***
-- so it can also help us to revaluate the degradation point instead of using
-  130 - fixed point like my previous plan, also we can use this as a transition
-  point to use phase II
-- Also with sliding window in this, we can find components in each engine (not
-  principal components) which mean it shouldn't be explainable (blackbox)
-- But we might be able to use PCA in here to actually improve how we gonna
-  describe to the viewer (t-SNE/UMAP method)
-- To explain how this work, we should understand how AE work. As AE will extract
-  the informations into the 'bottleneck' and then try to re-create the
-  informations from that 'bottleneck'. RMSE will be calculate using the info2 -
-  info1
-  - Therefore, any anomaly appear will shape the info2, cause the rmse to change
-  - Also, the 'bottleneck' will also act as components
+- Focus more on individual ... therefore, we can pass the
+  [[id:02d9a1e7-298a-4b19-b436-dbc871a6ed3c][The data isn't avaiable]] problem
+- Its purpose is like a sensor which will measure the anomaly which are mainly
+  affect how an engine work.
 ** Transition Phase
 - Recognize if the quantity and quality of current cluster to move on to next phase
 - Is it enough for quantity of engine?
@@ -114,12 +98,12 @@ flowchart TD
   has cycles more than X cycles ... Imagine a cycle with only 3-4 , it won't
   give us any valuable information ...
 ** Phase II : GRU - Hazard
-
 *** Purpose
 - Focus more about a cluster of unit
-- And the output should give us information to evaluate which engine is gonna
-  fall down (percentage) and the maintancenent priority
--
+- This focus mainly on find the moment we should step in to maintain , also if
+  there is limitted in the number of engine which can be maintained
+  simutaneously, this will provide the answer for which engine should be fixed first
+- This will benefit us for decrease the cost for the maintenance.
 *** Custom loss function
 **** Discrete-time Hazard
 - is basically *Probability*
@@ -128,6 +112,63 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
 **** Monotonicity Regularizer (Ham rang buoc don dieu)
 - basically to make sure the percantage of the engine which will broken down can
   decrease ... (ban chat chung phai tuyen tinh tang len)
+
+* Best Features
+
+** Categorical Feature
+- After the process of AE, we can get its bottleneck to actually decrease its
+  dimension to use as optional feature that can increase the accuracy as the
+  more time past
+- This [[pdf:Paper Please/CLAIRE.pdf::1][paper]] is maybe the key for us to utilize this feature more, to get
+  Interpretability & Visualization
+- So to use this feature for the phase II, we should consider about :
+  - fusion time : early, mid or late
+  -
+
+** Interpretability?
+
+** Visualization?
+
+* Potential Question
+** Why for Tier 2/3
+:PROPERTIES:
+:ID:       7a61a4e5-6162-49f6-981b-9fbf70317a48
+:END:
+
+** Why do u choose these model but not anything which are better? (transformer/lstm)
+- Needed prove to show that these heavy model tend to be more overfitting than
+  GRU
+- Because it more efficient with small size of data
+
+** Is it really worth for phaseII?
+- Một điểm tôi khuyên bạn thành thật thừa nhận thay vì né tránh — vì nó thực ra
+  làm lập luận của bạn mạnh hơn: đúng là có trường hợp Phase II không cần thiết
+  — nếu máy đó rẻ, hậu quả hỏng thấp, chi phí kiểm tra thủ công thấp, thì cứ có
+  cảnh báo từ AE là đủ, không cần đầu tư thêm phân tích sâu. Việc bạn chủ động
+  nói ra ranh giới này ("Phase II chỉ đáng đầu tư cho máy/dây chuyền có giá trị
+  cao hoặc hậu quả hỏng nghiêm trọng — đúng kiểu máy nhập khẩu đắt tiền mà đề
+  xuất ban đầu của bạn đang nhắm tới") sẽ cho ban giám khảo thấy bạn hiểu rõ
+  trade-off chi phí-lợi ích của chính hệ thống mình đề xuất, không chỉ cố bán
+  "càng nhiều mô hình càng tốt" — đây chính xác là điều phân biệt một đề xuất kỹ
+  thuật trưởng thành với một đề xuất chỉ đang khoe số lượng thuật toán.
+
+** How will the model work ?
+
+*** Q : ... when we have new data
+- So basically when we have new data, the model won't need to run all the
+  pipeline again. It will only inference
+
+*** Q : ... when engine complete theirs cycle
+- So after getting maintain, its previous data and label will obviously getting
+  store
+- Also we should consider re-train after a period of time ...
+
+*** Q : ... on production line
+- Because of its lightweight, it should work flawlessly on factory's machine. Right?
+
+
+
+** Why not using RMSE for validate check?
 
 * How to evaluate our model
 - Include C-index, IBS, Calibration and it is completely different from RMSE
