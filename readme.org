@@ -69,6 +69,11 @@ flowchart TD
 - The data maybe provide at form of minute, second ...
 ** The engine won't behave the same after getting maintainance
 * Brain Storm Section
+** Preprocess Phase
+- So FFT could be applied to the sensor that have repetation behaviour. We
+  should change to *Frequency Domain* as it should lower the cost to run by apply
+  a Physical Fact ...
+-
 ** Phase I : Con1d Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
 *** Structure
 - Basically the combination of Autoencoder (Neural Network) & Con1d is a type of
@@ -276,11 +281,6 @@ dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
 - Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu
   kết nối trực tiếp với tên chủ đề "Predictive & Knowledge AI" — tránh để giám
   khảo tự suy ra, nêu thẳng.
-* Notes
-- We should know how to decide the period to run tSNE and SHAP, i think label
-  should be add in late fusion, and SHAP should run when we gonna maintain
-  soon... But what about the bin?
-- We also should ask how AE-base and Conv1d-AE will affect the GRU as the latent
-  space in both of them are different
-- Consider using Atention Masking if GRU is not enough ... (more care in
-  degradation point) but maybe not need as we use Sliding Window already
+* TODO Question & Notes
+** [ ] Asking for how and how much data will update (1 batch) in real-life
+** [ ]

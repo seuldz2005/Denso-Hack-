@@ -21,24 +21,27 @@ import numpy as np
 
 @dataclass
 class EngineRecord:
-    """Một engine (hoặc một renewal-cycle segment, nếu đã cắt theo bảo dưỡng)."""
+    """Một engine trong development set."""
     engine_id: str
-    latent_seq: np.ndarray   # shape (T, latent_dim) -- output encoder Phase I
-    n_bins: int              # số bin thời gian engine này thực sự có dữ liệu
-    event_bin: int | None    # bin xảy ra sự kiện (0-indexed); None nếu censored
+    latent_seq: np.ndarray   # shape (T, latent_dim) -- output encoder Phase I, ĐÃ cắt tại [:event_bin+1] nếu có event
+    n_bins: int              # số bin thực sự dùng = len(latent_seq); bằng event_bin+1 nếu có event
+    event_bin: int | None    # bin đầu tiên phát hiện degradation onset (0-indexed);
+                             # None nếu engine chưa vượt qua elbow trong cửa sổ quan sát (censored).
 
 
 def build_hazard_target(n_bins: int, event_bin: int | None) -> np.ndarray:
     """
     Trả về vector nhãn y có độ dài n_bins.
 
-    - Nếu event_bin is None (censored): toàn bộ y = 0. Đây là điểm cốt lõi
-      khiến pipeline dùng được dữ liệu censored -- không cần biết "sẽ hỏng
-      lúc nào", chỉ cần biết "đến giờ chưa hỏng".
-    - Nếu có event_bin: y = 0 ở mọi bin trước đó, y = 1 đúng tại event_bin.
-      Các bin SAU event_bin không tồn tại trong sequence (engine dừng quan
-      sát ngay khi sự kiện xảy ra) -- không được để lọt bin nào sau đó vào
-      loss, nếu không sẽ tính loss trên dữ liệu không tồn tại.
+    - Nếu event_bin is None (censored): toàn bộ y = 0. Engine chưa đạt đến
+      degradation onset trong cửa sổ quan sát -- tất cả các bin đều là
+      "chưa có gì xảy ra".
+    - Nếu có event_bin: y = 0 ở mọi bin trước đó, y = 1 đúng tại event_bin
+      (điểm chuyển từ healthy sang degradation).
+      Engine bị REMOVE KHỎI RISK SET ngay sau event_bin -- caller có trách
+      nhiệm đảm bảo latent_seq đã được cắt tại [:event_bin+1] trước khi
+      tạo EngineRecord, do đó n_bins = event_bin + 1. Không có bin nào
+      sau event_bin trong sequence.
     """
     y = np.zeros(n_bins, dtype=np.float32)
     if event_bin is not None:

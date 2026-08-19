@@ -12,7 +12,7 @@ Chuẩn bị C-MAPSS TRAIN cho experiment:
     70% development / 30% test
       ↓
     development: truncate quanh elbow ~130
-    test: initially right-censored
+    test: initial observation state
 
 Chỉ sử dụng TRAIN của C-MAPSS.
 """
@@ -47,7 +47,7 @@ class SplitConfig:
     # Không để development engine quá gần failure
     min_cycles_before_failure: int = 20
 
-    # Initial censoring của test
+    # Initial observation của test
     test_fraction_min: float = 0.10
     test_fraction_max: float = 0.30
 
@@ -177,55 +177,50 @@ def prepare_cmapss_split(config: SplitConfig = None):
     # --------------------------------------------------------
 
     train_data = {}
+    train_metadata = {}
 
     for engine_id in train_ids:
 
         full = engine_data[engine_id]
-
         n_cycles = len(full)
 
-        # Không được quan sát quá gần failure
         safe_max = max(
             1,
             n_cycles - config.min_cycles_before_failure
         )
 
-        # Một số engine được giữ lâu hơn elbow
-        if (
-            rng.random()
-            < config.extended_probability
-        ):
+        is_extended = (
+            rng.random() < config.extended_probability
+        )
 
+        if is_extended:
             end = config.elbow_cycle + rng.integers(
                 1,
                 config.extended_max_extra + 1,
             )
-
-        # Phần lớn engine chỉ quanh elbow
         else:
-
             end = rng.integers(
-                max(
-                    1,
-                    config.elbow_cycle
-                    - config.elbow_tolerance,
-                ),
-                config.elbow_cycle
-                + config.elbow_tolerance
-                + 1,
+                max(1, config.elbow_cycle - config.elbow_tolerance),
+                config.elbow_cycle + config.elbow_tolerance + 1,
             )
 
-        # Không vượt quá trajectory thực tế
-        # và không tới sát failure
         end = min(end, safe_max)
 
         train_data[engine_id] = full[:end]
 
+        train_metadata[engine_id] = {
+            "is_extended": is_extended,
+            "observed_cycles": end,
+        }
+
     # --------------------------------------------------------
-    # 4. Test trajectories
+    # 4. Test INITIAL OBSERVATION
     #
-    # Ban đầu chỉ expose một phần nhỏ trajectory.
-    # Mỗi engine có observation length khác nhau.
+    # Đây chỉ là trạng thái quan sát tại thời điểm
+    # experiment bắt đầu.
+    #
+    # Chưa phải realtime simulation.
+    # Realtime simulator sẽ reveal thêm cycle sau này.
     # --------------------------------------------------------
 
     test_rng = np.random.default_rng(
@@ -233,6 +228,7 @@ def prepare_cmapss_split(config: SplitConfig = None):
     )
 
     test_data = {}
+    test_observation_points = {}
 
     for engine_id in test_ids:
 
@@ -240,6 +236,8 @@ def prepare_cmapss_split(config: SplitConfig = None):
 
         n_cycles = len(full)
 
+        # Mỗi engine bắt đầu experiment ở một
+        # observation point khác nhau.
         fraction = test_rng.uniform(
             config.test_fraction_min,
             config.test_fraction_max,
@@ -250,13 +248,19 @@ def prepare_cmapss_split(config: SplitConfig = None):
             int(n_cycles * fraction),
         )
 
-        # Censor: không reveal failure
+        # Không expose failure ngay từ initial state.
         end = min(
             end,
             n_cycles - 1,
         )
 
-        test_data[engine_id] = full[:end]
+        # Phần data hiện đang được quan sát.
+        test_data[engine_id] = full[:end].copy()
+
+        # Lưu lại current observation point.
+        # Simulator sẽ dùng nó để biết cần reveal
+        # từ cycle nào tiếp theo.
+        test_observation_points[engine_id] = end
 
     # --------------------------------------------------------
     # 5. Return tất cả những gì notebook cần
@@ -265,17 +269,23 @@ def prepare_cmapss_split(config: SplitConfig = None):
     return {
         "df": df,
 
-        # Toàn bộ trajectory gốc.
-        # Chỉ dùng để kiểm tra / simulation.
+        # FULL trajectories.
+        # Giữ nguyên để simulator và evaluation sử dụng.
+        # Không đưa trực tiếp vào model.
         "engine_data": engine_data,
 
-        # 70%
+        # 70% development
         "train_data": train_data,
         "train_ids": train_ids,
+        "train_metadata": train_metadata,
 
-        # 30%
+        # 30% test
+        # Chỉ chứa phần đã được observe tại thời điểm bắt đầu.
         "test_data": test_data,
         "test_ids": test_ids,
+
+        # Cycle hiện tại mà mỗi test engine đã được observe.
+        "test_observation_points": test_observation_points,
 
         # Sensors đang sử dụng
         "sensors": SENSORS,
