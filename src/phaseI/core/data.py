@@ -28,20 +28,6 @@ class NormalizationStats:
     def apply(self, x: np.ndarray) -> np.ndarray:
         return (x - self.mean) / np.where(self.std == 0, 1.0, self.std)
 
-
-def select_healthy_region(series: np.ndarray, healthy_fraction: float = 0.25) -> np.ndarray:
-    """
-    series: (n_cycles, n_sensors) -- toàn bộ lịch sử một engine.
-    Trả về đoạn đầu (healthy_fraction * n_cycles), giả định vùng này chưa
-    suy thoái đáng kể. Đây là giả định KINH NGHIỆM cho C-MAPSS -- khi có dữ
-    liệu DENSO thật, đổi lại thành "đoạn ngay sau lần bảo trì gần nhất" nếu
-    xác nhận được từ log Phòng Bảo dưỡng.
-    """
-    n = series.shape[0]
-    cutoff = max(1, int(n * healthy_fraction))
-    return series[:cutoff]
-
-
 def fit_normalization(healthy_series_list: list[np.ndarray]) -> NormalizationStats:
     """
     healthy_series_list: list các đoạn khỏe mạnh (từ nhiều engine tham

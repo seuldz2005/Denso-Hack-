@@ -3,10 +3,7 @@
 * Diagram
 #+BEGIN_SRC mermaid :file my-diagram.png
 flowchart TD
-    In["Incoming Data\n(fleet size / history length)"] -->|assess| Cond{"Enough fleet + history?"}
-
-    Cond -->|not enough| AE
-    Cond -->|enough| CLF
+    In["Incoming Data\n(fleet size / history length)"] -->|assess| AE
 
     subgraph Phase1 [Phase I — Cold-start]
         direction TB
@@ -19,7 +16,7 @@ flowchart TD
 
     subgraph Phase2 [Phase II — Mature data]
         direction TB
-        CLF["Custom Loss Function\n(LSTM / GRU)"]
+        CLF["Custom Loss Function\n(GRU)"]
 
         CLF -->|labeling target| MFPCA["MFPCA + GMM + Youden"]
         CLF -->|physical constraint| Mono["Monotonicity Regularizer"]
@@ -34,9 +31,6 @@ flowchart TD
 
     DP -.->|transition once\nfleet/history accumulates| CLF
 #+END_SRC
-
-#+RESULTS:
-[[file:my-diagram.png]]
 
 * Problem Statement
 ** Denso's problem
@@ -73,8 +67,39 @@ flowchart TD
 - We should consider that all the engines should work in different term of its
 ** Recored data maybe not in the right shape
 - The data maybe provide at form of minute, second ...
+** The engine won't behave the same after getting maintainance
 * Brain Storm Section
-** Phase I : Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
+** Phase I : Con1d Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
+*** Structure
+- Basically the combination of Autoencoder (Neural Network) & Con1d is a type of
+  structure inside the encoder/decoder of AE
+- So với Dense thuần (fully-connected) — tiết kiệm tham số cực lớn, quan trọng
+  với dữ liệu ít. Nếu dùng Dense, bạn phải "trải phẳng" window thành một vector
+  630 số (30×21), rồi nhân với ma trận trọng số đầy đủ để nén xuống latent — số
+  tham số tỷ lệ với 630 × kích_thước_lớp_ẩn, rất lớn. Conv1D chỉ cần học kernel
+  nhỏ (5 giá trị × số channel) dùng lại nhiều lần — ít tham số hơn nhiều bậc,
+  đúng tinh thần "lightweight, tránh overfit với ít dữ liệu suy thoái" đã theo
+  xuyên suốt.
+
+- Tính bất biến theo vị trí (translation invariance) — lợi ích thực sự cho bài
+  toán suy thoái. Vì kernel dùng chung cho mọi vị trí, Conv1D nhận diện được
+  một pattern cụ thể (ví dụ một cú tăng đột biến rung động) bất kể nó xảy ra ở
+  cycle nào trong window — window bắt đầu suy thoái ở cycle thứ 3 hay cycle thứ
+  20 của chính nó đều được nhận diện như nhau. Dense thuần không có tính chất
+  này — nó học riêng biệt cho từng vị trí, nên cùng một pattern xuất hiện ở vị
+  trí khác sẽ bị coi là "chưa từng thấy".
+
+- So với LSTM-AE (ý tưởng ban đầu bạn từng đề xuất) — xử lý song song, nhanh
+  hơn, và đã có bằng chứng thực nghiệm ủng hộ cho đúng bối cảnh công nghiệp.
+  LSTM phải xử lý tuần tự từng cycle một (cycle 2 phải đợi cycle 1 xử lý xong),
+  trong khi Conv1D tính đồng thời mọi vị trí trong window — nhanh hơn đáng kể
+  khi window đã cố định độ dài ngắn (30 cycle, không cần mô hình phụ thuộc rất
+  dài như GRU-hazard ở Phase II phải làm). Đây cũng chính là kỹ thuật được xác
+  nhận tốt trong nghiên cứu công nghiệp đã tìm trước đó: temporal convolutional
+  autoencoder đạt hiệu năng ổn định nhất so với Isolation Forest khi mô hình
+  hóa động lực học không tuần hoàn, đa quy mô trong dữ liệu thật — không phải
+  lựa chọn ngẫu nhiên, mà có tiền lệ cụ thể trong đúng loại bài toán industrial
+  anomaly detection.
 *** Purpose
 - Focus more on individual ... therefore, we can pass the
   [[id:02d9a1e7-298a-4b19-b436-dbc871a6ed3c][The data isn't avaiable]] problem
@@ -114,7 +139,6 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
   decrease ... (ban chat chung phai tuyen tinh tang len)
 
 * Best Features
-
 ** Categorical Feature
 - After the process of AE, we can get its bottleneck to actually decrease its
   dimension to use as optional feature that can increase the accuracy as the
@@ -164,8 +188,8 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
 - Also we should consider re-train after a period of time ...
 
 *** Q : ... on production line
-- Because of its lightweight, it should work flawlessly on factory's machine. Right?
-
+- Because of its lightweight, it should work flawlessly on factory's machine.
+  Right?
 
 
 ** Why not using RMSE for validate check?
@@ -252,14 +276,11 @@ dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
 - Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu
   kết nối trực tiếp với tên chủ đề "Predictive & Knowledge AI" — tránh để giám
   khảo tự suy ra, nêu thẳng.
-** Asignment
-- Bạn — Phase 2 (MFPCA/GMM/hazard-LSTM), như đã định.
-- Người 2 — Phase 1 (autoencoder), như đã định.
-- Người 3 — thay vì "quản lý transition + draft pitch", nên là chủ trì phần đánh
-  giá & tích hợp xuyên suốt cả hai phase: xây bộ harness đo lường (Spearman
-  correlation cho AE, C-index/IBS/calibration cho Phase 2, multi-seed
-  evaluation), và cùng bạn với người 2 thống nhất tiêu chí PhaseCheck (dựa trên
-  số liệu thực nghiệm hai người kia cung cấp, không tự quyết một mình). Đây là
-  việc rất dễ bị bỏ quên vì cả hai người làm model đều sẽ mải tối ưu phần riêng
-  của mình — nếu không ai chuyên trách, phần "hai module có thực sự ăn khớp với
-  nhau không" dễ chỉ được kiểm tra vội vào phút cuối.
+* Notes
+- We should know how to decide the period to run tSNE and SHAP, i think label
+  should be add in late fusion, and SHAP should run when we gonna maintain
+  soon... But what about the bin?
+- We also should ask how AE-base and Conv1d-AE will affect the GRU as the latent
+  space in both of them are different
+- Consider using Atention Masking if GRU is not enough ... (more care in
+  degradation point) but maybe not need as we use Sliding Window already
