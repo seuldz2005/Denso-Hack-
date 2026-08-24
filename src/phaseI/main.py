@@ -30,7 +30,6 @@ def run_phase1(
     n_sensors: int,
     window_len: int = 30,
     latent_dim: int = 16,
-    healthy_fraction: float = 0.25,
     train_stride: int = 1,
     bin_stride: int = 10,
     n_epochs: int = 30,
@@ -42,38 +41,33 @@ def run_phase1(
     """
     Chạy toàn bộ Phase I.
 
+    train_data đã được truncate tại elbow_cycle bởi prepare_cmapss_split()
+    — toàn bộ data trong đây đều là healthy, không cần cắt thêm.
+
     Returns
     -------
     model:
-        Autoencoder đã train và freeze.
+        Autoencoder đã train và freeze encoder.
 
     stats:
-        NormalizationStats dùng lại cho Phase II/test.
+        NormalizationStats dùng lại cho Phase II và inference.
 
     normalized_data:
-        Dữ liệu train sau normalization.
+        Toàn bộ train trajectories sau normalization.
+
+    latent_data:
+        {engine_id: latent_seq (n_bins, latent_dim)} — input trực tiếp cho Phase II.
     """
 
     # ========================================================
     # 1. Fit normalization trên development data
+    #
+    # train_data đã được truncate tại elbow_cycle bởi prepare_cmapss_split()
+    # — toàn bộ data trong đây đều là healthy, fit normalization trên tất cả.
     # ========================================================
 
-    healthy_data = []
-
-    for series in train_data.values():
-
-        n = len(series)
-        cutoff = max(
-            1,
-            int(n * healthy_fraction),
-        )
-
-        healthy_data.append(
-            series[:cutoff]
-        )
-
     stats = fit_normalization(
-        healthy_data
+        list(train_data.values())
     )
 
     # ========================================================
@@ -87,36 +81,32 @@ def run_phase1(
 
     # ========================================================
     # 3. Cắt windows để train AE
+    #
+    # Dùng toàn bộ normalized_data — đã là healthy (xem bước 1).
+    # stride nhỏ (train_stride=1) để tối đa hóa số mẫu cho AE.
     # ========================================================
 
-    healthy_windows = []
+    training_windows = []
 
     for series in normalized_data.values():
 
-        n = len(series)
-
-        cutoff = max(
-            1,
-            int(n * healthy_fraction),
-        )
-
         windows = cut_windows(
-            series[:cutoff],
+            series,
             window_len=window_len,
             stride=train_stride,
         )
 
         if len(windows) > 0:
-            healthy_windows.append(windows)
+            training_windows.append(windows)
 
-    if not healthy_windows:
+    if not training_windows:
         raise ValueError(
             "Không tạo được training window nào. "
-            "Hãy kiểm tra window_len / healthy_fraction."
+            "Hãy kiểm tra window_len và độ dài trajectory."
         )
 
-    healthy_windows = np.concatenate(
-        healthy_windows,
+    training_windows = np.concatenate(
+        training_windows,
         axis=0,
     )
 
@@ -125,7 +115,7 @@ def run_phase1(
     # ========================================================
 
     model = run_training(
-        healthy_windows=healthy_windows,
+        training_windows=training_windows,
         n_sensors=n_sensors,
         window_len=window_len,
         latent_dim=latent_dim,

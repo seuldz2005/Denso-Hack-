@@ -70,3 +70,17 @@ def integrated_brier_score(train_event_times, train_event_observed,
     y_train = Surv.from_arrays(train_event_observed.astype(bool), train_event_times)
     y_test = Surv.from_arrays(test_event_observed.astype(bool), test_event_times)
     return _ibs(y_train, y_test, survival_curves, time_grid)
+
+def cumulative_hazard(h: np.ndarray) -> float:
+    """
+    -log(S(T)) = tổng -log(1-h(t)) qua toàn bộ chuỗi quan sát được.
+    Không bao giờ bão hòa như median_survival_time -- càng nhiều bin có
+    h cao (dù chưa vượt 0.5), giá trị này càng tăng, phản ánh đúng "tổng
+    lượng rủi ro tích lũy" thay vì chỉ hỏi "đã vượt ngưỡng 0.5 chưa".
+    Đây là thước đo rủi ro chuẩn trong survival analysis (tương đương
+    linear predictor trong Cox model), phù hợp làm predicted_risk cho
+    C-index hơn hẳn median survival time.
+    """
+    eps = 1e-7
+    h = np.clip(h, eps, 1 - eps)
+    return float(-np.sum(np.log(1 - h)))

@@ -47,6 +47,14 @@ flowchart TD
 - They did also provide 5M1E type of data which mean anomaly data that are
   verified by human
 - [ ] also they want a recall/F1 before and after (Youden Index)
+- Deep learning has shown a lot of promise in many different
+fields for solving a variety of problems that have an abun- dance of data, such
+as in image recognition, large language models and even in machinery prognostics
+using deep neural networks as models. While deep learning has shown the abil-
+ity to achieve highly accurate RUL predictions, but it often outputs point
+estimates without quantifying the uncertainty (Peng et al., 2019) This work
+presents a model that shows it is capable of state-of-the-art performance while
+quantifying the uncertainty.
 * Reality Facts
 :PROPERTIES:
 :ID:       39cbe103-698a-40f6-b1ec-f81f31628150
@@ -110,6 +118,7 @@ flowchart TD
   [[id:02d9a1e7-298a-4b19-b436-dbc871a6ed3c][The data isn't avaiable]] problem
 - Its purpose is like a sensor which will measure the anomaly which are mainly
   affect how an engine work.
+** Data Generator
 ** Transition Phase
 - Recognize if the quantity and quality of current cluster to move on to next phase
 - Is it enough for quantity of engine?
@@ -223,13 +232,6 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
   quan sát được trong nhóm đó. Đây là biểu đồ trực quan rất tốt để demo — dễ
   giải thích cho ban giám khảo hơn nhiều so với con số C-index trừu tượng.
 
-* Phase Description
-Ta sẽ có 2 phase, khi data vẫn còn ít, ta sẽ sử dụng autoencoder nhằm phát
-hiện bất thường, vì là thời điểm healthy phase nên việc sử dụng chúng chỉ nhằm
-mục tiêu đảm bảo trường hợp xấu nhất (rất khó xảy ra). Khi đạt đến 1 thời điểm
-nhất định, ta sẽ sử dụng pipeline : MFPCA + GMM + Youden index -> label, và sử
-dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
-
 * Suggestion
 ** Problem statement
 - Tham dự triển lãm Intelligent Asia Hanoi 2026 và các phiên talkshow chuyên đề
@@ -281,6 +283,21 @@ dụng LSTM cùng với custom loss function (Discrete-time Hazard , Label,
 - Relevance to competition theme — nói rõ không ngầm địnhMột câu hoặc hai câu
   kết nối trực tiếp với tên chủ đề "Predictive & Knowledge AI" — tránh để giám
   khảo tự suy ra, nêu thẳng.
+** Why does this project fit into Deso's demand
+một vấn đề phổ biến trong chẩn đoán máy móc là thiếu dữ liệu cho trạng thái lỗi. Cơ sở dữ liệu mất cân bằng — đặc biệt khi thiếu dữ liệu từ đối tượng đã hỏng — gây khó khăn lớn cho phân tích dữ liệu và học máy. Khi phần lớn dữ liệu đại diện cho đối tượng không hỏng, mô hình học máy có xu hướng học nhiều về nhóm này và ít về nhóm thiểu số (đối tượng hỏng). Điều này có thể dẫn đến overfitting... Một giải pháp có thể là tăng cường dữ liệu (augment) từ đối tượng hỏng. Tuy nhiên, trong bài báo này, một hướng tiếp cận khác được chọn — cho phép giám sát và chẩn đoán hiệu quả trạng thái hiện tại của hệ thống chỉ dựa trên đặc trưng học được từ trạng thái khỏe mạnh.
+* Explain to member ...
+- First up i will emphasize to read the code in demo folder first, and realtime simulation
+- Thien will update code in phase I : AutoEncoder
+- Minh will code the transistiong phase
+-
+
+
 * TODO Question & Notes
 ** [ ] Asking for how and how much data will update (1 batch) in real-life
-** [ ]
+** [ ] Attention GRU
+* TODO Code pipeline
+** [ ] Training for Conv1d AE + GRU hazard
+** [ ] Adding VAE (fault index )
+** [ ] Transition Phase
+** [ ] Inference for I & II
+** [ ] Append optinal feature : VAE + GAN + Label

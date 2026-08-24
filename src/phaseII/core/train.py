@@ -18,7 +18,7 @@ from torch.utils.data import Dataset, DataLoader
 from src.phaseII.core.data import EngineRecord, pad_batch
 from src.phaseII.core.model import GRUHazard
 from src.phaseII.core.loss import combined_loss
-from src.phaseII.core.metrics import concordance_index, median_survival_time, hazard_to_survival
+from src.phaseII.core.metrics import concordance_index, median_survival_time, hazard_to_survival, cumulative_hazard
 
 
 class LatentSequenceDataset(Dataset):
@@ -49,19 +49,20 @@ def make_collate_fn(latent_dim: int):
     return collate_fn
 
 
+import copy
+
 def run_training(train_records, val_records, latent_dim: int,
                   hidden_dim: int = 32, lam_monotonic: float = 0.1,
                   n_epochs: int = 50, lr: float = 1e-3, seed: int = 0,
-                  device: str = "cpu"):
+                  device: str = "cpu", patience: int = 30):
     """
-    Trả về (model, history) -- history là dict chứa loss/C-index theo epoch,
-    để bạn vẽ curve và log lại cho phần multi-seed evaluation sau này.
+    patience: số epoch liên tiếp không cải thiện val_c_index trước khi
+    dừng sớm. Đặt patience=n_epochs nếu muốn tắt hẳn early stopping,
+    chỉ dùng cơ chế lưu best checkpoint.
 
-    ABLATION: để tắt Label/DP/operating-condition (baseline), đơn giản là
-    không đưa extra_features vào EngineRecord.latent_seq trước khi gọi hàm
-    này (tức nối feature phụ vào latent_seq từ bên ngoài, trước khi build
-    EngineRecord -- giữ model.py/data.py không cần biết feature nào đang
-    bật/tắt, tránh if/else rải khắp code).
+    Trả về model TẠI EPOCH TỐT NHẤT theo val_c_index, không phải model
+    ở epoch cuối cùng -- đây chính là điểm sửa để tránh lấy nhầm model
+    đã overfit về sau (như C-index tụt xuống 0.3 bạn gặp phải).
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -75,6 +76,11 @@ def run_training(train_records, val_records, latent_dim: int,
 
     history = {"train_loss": [], "train_hazard_loss": [], "train_monotonic": [],
                "val_c_index": []}
+
+    best_val_c = float("-inf")
+    best_state_dict = None
+    best_epoch = -1
+    epochs_without_improvement = 0
 
     for epoch in range(n_epochs):
         model.train()
@@ -102,9 +108,37 @@ def run_training(train_records, val_records, latent_dim: int,
         val_c = evaluate_c_index(model, val_records, latent_dim, device)
         history["val_c_index"].append(val_c)
 
+        # --- Lưu checkpoint tốt nhất ---
+        # val_c có thể là NaN (nếu batch val không có event nào) -- so
+        # sánh với NaN trong Python luôn trả False, nên nhánh này tự động
+        # bị bỏ qua đúng ý, không cần if riêng để check NaN.
+        improved = val_c > best_val_c
+        if improved:
+            best_val_c = val_c
+            best_state_dict = copy.deepcopy(model.state_dict())
+            best_epoch = epoch
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        marker = " *" if improved else ""
         print(f"epoch {epoch:3d} | loss={epoch_losses['total']:.4f} "
               f"(hazard={epoch_losses['hazard']:.4f}, mono={epoch_losses['monotonic']:.4f}) "
-              f"| val C-index={val_c:.4f}")
+              f"| val C-index={val_c:.4f}{marker}")
+
+        # --- Early stopping ---
+        if epochs_without_improvement >= patience:
+            print(f"\nDừng sớm tại epoch {epoch} -- không cải thiện sau {patience} epoch liên tiếp.")
+            print(f"Model tốt nhất: epoch {best_epoch}, val C-index = {best_val_c:.4f}")
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+    else:
+        print("Cảnh báo: chưa từng có val_c_index hợp lệ (toàn NaN) -- trả về model epoch cuối.")
+
+    history["best_epoch"] = best_epoch
+    history["best_val_c_index"] = best_val_c
 
     return model, history
 
@@ -128,8 +162,11 @@ def evaluate_c_index(model: GRUHazard, records: list[EngineRecord],
         length = torch.tensor([r.n_bins])
         h = model(latent, length).cpu().numpy()[0]
 
-        med = median_survival_time(h)
-        predicted_risk.append(-med)  # đảo dấu theo quy ước lifelines
+        # med = median_survival_time(h)
+        # predicted_risk.append(-med)  # đảo dấu theo quy ước lifelines
+
+        risk = cumulative_hazard(h)
+        predicted_risk.append(risk)
 
         if r.event_bin is not None:
             event_times.append(r.event_bin)
@@ -138,8 +175,13 @@ def evaluate_c_index(model: GRUHazard, records: list[EngineRecord],
             event_times.append(r.n_bins - 1)
             event_observed.append(0)
 
+    event_observed_arr = np.array(event_observed)
+    if event_observed_arr.sum() == 0:
+        # Không có engine nào có event trong tập này → C-index undefined
+        return float("nan")
+
     return concordance_index(
-        np.array(event_times), np.array(predicted_risk), np.array(event_observed)
+        np.array(event_times), np.array(predicted_risk), event_observed_arr
     )
 
 
@@ -154,7 +196,7 @@ def run_multi_seed(train_records, val_records, latent_dim: int, seeds=(0, 1, 2, 
     for seed in seeds:
         _, history = run_training(train_records, val_records, latent_dim,
                                    seed=seed, **kwargs)
-        final_c_indices.append(history["val_c_index"][-1])
+        final_c_indices.append(history["best_val_c_index"])
 
     final_c_indices = np.array(final_c_indices)
     print(f"\nC-index qua {len(seeds)} seed: "
