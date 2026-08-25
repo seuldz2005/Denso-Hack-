@@ -1,18 +1,16 @@
 """
-split_cmapss.py
+data.py
 
-Chuẩn bị C-MAPSS TRAIN cho experiment:
+Chuẩn bị C-MAPSS TRAIN theo kiến trúc phân tầng 2 cấp (2-Tier Split Architecture):
 
-    .txt
-      ↓
-    DataFrame
-      ↓
-    engine trajectories
-      ↓
-    70% development / 30% test
-      ↓
-    development: truncate quanh elbow ~130
-    test: initial observation state
+TẬP DỮ LIỆU GỐC (100 Động cơ)
+    + Split Dataset (70% TRAIN / 30% TEST)
+        + TRAIN (70 Động cơ để học)
+            Kịch bản bảo trì: 70% trong TRAIN là TBM / 30% trong TRAIN là CBM
+            + TBM: Bảo trì định kỳ, cắt ngắn Cycle 130 - 135
+            + CBM: Bảo trì dự đoán, cắt khi RUL còn 15 - 35
+        + TEST (30 Động cơ để thử nghiệm)
+            Mô phỏng máy đang chạy (Stream từ 15% - 65%)
 
 Chỉ sử dụng TRAIN của C-MAPSS.
 """
@@ -31,25 +29,25 @@ class SplitConfig:
 
     # Dataset
     data_path: str = "data/train_FD001.txt"
-
-    # Engine split
-    train_ratio: float = 0.70
     random_seed: int = 42
 
-    # Piecewise-linear elbow
-    elbow_cycle: int = 130
-    elbow_tolerance: int = 10
+    # --- TẦNG 1: Tỉ lệ phân chia Train / Test ---
+    train_ratio: float = 0.70
 
-    # Một phần development engines được giữ lâu hơn elbow
-    extended_probability: float = 0.20
-    extended_max_extra: int = 50
+    # --- TẦNG 2: Kịch bản bảo trì trong tập Train ---
+    tbm_ratio: float = 0.70  # 70% của Train là TBM (~49 máy), 30% là CBM (~21 máy)
 
-    # Không để development engine quá gần failure
-    min_cycles_before_failure: int = 20
+    # 1. Kịch bản TBM (Time-Based Maintenance - Bảo trì định kỳ)
+    tbm_cycle_min: int = 130
+    tbm_cycle_max: int = 150
 
-    # Initial observation của test
-    test_fraction_min: float = 0.10
-    test_fraction_max: float = 0.30
+    # 2. Kịch bản CBM (Condition-Based Maintenance - Bảo trì dự đoán)
+    cbm_rul_min: int = 15
+    cbm_rul_max: int = 35
+
+    # --- TẬP TEST: Mô phỏng máy đang chạy ---
+    test_fraction_min: float = 0.15
+    test_fraction_max: float = 0.65
 
 
 # ============================================================
@@ -151,7 +149,7 @@ def prepare_cmapss_split(config: SplitConfig = None):
     rng = np.random.default_rng(config.random_seed)
 
     # --------------------------------------------------------
-    # 2. Split ENGINE 70 / 30
+    # 2. TẦNG 1: Split ENGINE 70% Train / 30% Test
     # --------------------------------------------------------
 
     engine_ids = np.array(
@@ -173,52 +171,69 @@ def prepare_cmapss_split(config: SplitConfig = None):
     )
 
     # --------------------------------------------------------
-    # 3. Development / Train trajectories
+    # 3. TẦNG 2: Kịch bản bảo trì cho tập Train
+    #    - 70% TBM (Bảo trì định kỳ: cắt cycle 130-150)
+    #    - 30% CBM (Bảo trì dự đoán: cắt khi RUL còn 15-35)
     # --------------------------------------------------------
+
+    train_ids_shuffled = np.array(train_ids).copy()
+    rng.shuffle(train_ids_shuffled)
+
+    n_tbm = int(len(train_ids) * config.tbm_ratio)
+    tbm_ids = sorted(train_ids_shuffled[:n_tbm].tolist())
+    cbm_ids = sorted(train_ids_shuffled[n_tbm:].tolist())
 
     train_data = {}
     train_metadata = {}
 
-    for engine_id in train_ids:
-
+    # 3.1. Xử lý nhóm TBM (Time-Based Maintenance)
+    for engine_id in tbm_ids:
         full = engine_data[engine_id]
         n_cycles = len(full)
 
-        safe_max = max(
-            1,
-            n_cycles - config.min_cycles_before_failure
+        target_cycle = rng.integers(
+            config.tbm_cycle_min,
+            config.tbm_cycle_max + 1,
         )
 
-        is_extended = (
-            rng.random() < config.extended_probability
-        )
-
-        if is_extended:
-            end = config.elbow_cycle + rng.integers(
-                1,
-                config.extended_max_extra + 1,
-            )
-        else:
-            end = rng.integers(
-                max(1, config.elbow_cycle - config.elbow_tolerance),
-                config.elbow_cycle + config.elbow_tolerance + 1,
-            )
-
-        end = min(end, safe_max)
+        end = min(target_cycle, n_cycles - 1)
+        end = max(1, end)
 
         train_data[engine_id] = full[:end]
-
         train_metadata[engine_id] = {
-            "is_extended": is_extended,
+            "maintenance_type": "TBM",
+            "is_extended": False,  # Censored / Normal (chưa tới failure)
             "observed_cycles": end,
+            "actual_rul_at_stop": n_cycles - end,
+            "total_cycles": n_cycles,
+        }
+
+    # 3.2. Xử lý nhóm CBM (Condition-Based Maintenance)
+    for engine_id in cbm_ids:
+        full = engine_data[engine_id]
+        n_cycles = len(full)
+
+        target_rul = rng.integers(
+            config.cbm_rul_min,
+            config.cbm_rul_max + 1,
+        )
+
+        end = max(1, n_cycles - target_rul)
+        end = min(end, n_cycles - 1)
+
+        train_data[engine_id] = full[:end]
+        train_metadata[engine_id] = {
+            "maintenance_type": "CBM",
+            "is_extended": True,  # Degraded / Event (quan sát đến khi phát hiện dấu hiệu suy thoái)
+            "observed_cycles": end,
+            "actual_rul_at_stop": n_cycles - end,
+            "total_cycles": n_cycles,
         }
 
     # --------------------------------------------------------
-    # 4. Test INITIAL OBSERVATION
-    #
+    # 4. TẬP TEST: Initial Observation (Mô phỏng máy đang chạy: 15% - 65%)
     # Đây chỉ là trạng thái quan sát tại thời điểm
     # experiment bắt đầu.
-    #
     # Chưa phải realtime simulation.
     # Realtime simulator sẽ reveal thêm cycle sau này.
     # --------------------------------------------------------
@@ -231,13 +246,9 @@ def prepare_cmapss_split(config: SplitConfig = None):
     test_observation_points = {}
 
     for engine_id in test_ids:
-
         full = engine_data[engine_id]
-
         n_cycles = len(full)
 
-        # Mỗi engine bắt đầu experiment ở một
-        # observation point khác nhau.
         fraction = test_rng.uniform(
             config.test_fraction_min,
             config.test_fraction_max,
@@ -274,9 +285,11 @@ def prepare_cmapss_split(config: SplitConfig = None):
         # Không đưa trực tiếp vào model.
         "engine_data": engine_data,
 
-        # 70% development
+        # 70% development (Train)
         "train_data": train_data,
         "train_ids": train_ids,
+        "tbm_ids": tbm_ids,
+        "cbm_ids": cbm_ids,
         "train_metadata": train_metadata,
 
         # 30% test

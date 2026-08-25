@@ -1,5 +1,9 @@
 import sys
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.phaseI.main import run_phase1
 from src.phaseII.main import run_phase2
 
@@ -14,16 +18,15 @@ config = SplitConfig(
 
     train_ratio=0.70,
 
-    elbow_cycle=130,
-    elbow_tolerance=5,
+    tbm_ratio=0.70,
+    tbm_cycle_min=130,
+    tbm_cycle_max=150,
 
-    extended_probability=0.30,
-    extended_max_extra=50,
+    cbm_rul_min=15,
+    cbm_rul_max=35,
 
-    min_cycles_before_failure=20,
-
-    test_fraction_min=0.10,
-    test_fraction_max=0.30,
+    test_fraction_min=0.15,
+    test_fraction_max=0.65,
 
     random_seed=42,
 )
