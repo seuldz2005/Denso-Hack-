@@ -1,18 +1,30 @@
 """
 data.py
 
-Chuẩn bị C-MAPSS TRAIN theo kiến trúc phân tầng 2 cấp (2-Tier Split Architecture):
+Prepare C-MAPSS TRAIN for a realistic degradation simulation.
 
-TẬP DỮ LIỆU GỐC (100 Động cơ)
-    + Split Dataset (70% TRAIN / 30% TEST)
-        + TRAIN (70 Động cơ để học)
-            Kịch bản bảo trì: 70% trong TRAIN là TBM / 30% trong TRAIN là CBM
-            + TBM: Bảo trì định kỳ, cắt ngắn Cycle 130 - 135
-            + CBM: Bảo trì dự đoán, cắt khi RUL còn 15 - 35
-        + TEST (30 Động cơ để thử nghiệm)
-            Mô phỏng máy đang chạy (Stream từ 15% - 65%)
+Design
+------
+Original C-MAPSS:
+    engine trajectory -> run-to-failure
 
-Chỉ sử dụng TRAIN của C-MAPSS.
+Our simulation:
+    1. Split engines into TRAIN / TEST.
+    2. TRAIN:
+        - mostly normal observed trajectories
+        - a small number of trajectories contain rare abnormal patterns
+        - trajectories are NEVER extended beyond their original length
+    3. TEST:
+        - only an initial fraction of each trajectory is observable
+        - the remaining trajectory stays hidden for realtime simulation
+    4. Keep original full trajectories untouched for evaluation.
+
+Important semantic separation
+-----------------------------
+observation cutoff
+    != degradation onset
+    != failure event
+    != rare abnormal event
 """
 
 from dataclasses import dataclass
@@ -27,31 +39,66 @@ import pandas as pd
 @dataclass
 class SplitConfig:
 
+    # --------------------------------------------------------
     # Dataset
-    data_path: str = "data/train_FD001.txt"
+    # --------------------------------------------------------
+
+    data_path: str = "demo/data/train_FD001.txt"
     random_seed: int = 42
 
-    # --- TẦNG 1: Tỉ lệ phân chia Train / Test ---
+    # --------------------------------------------------------
+    # TRAIN / TEST split
+    # --------------------------------------------------------
+
     train_ratio: float = 0.70
 
-    # --- TẦNG 2: Kịch bản bảo trì trong tập Train ---
-    tbm_ratio: float = 0.70  # 70% của Train là TBM (~49 máy), 30% là CBM (~21 máy)
+    # --------------------------------------------------------
+    # TRAIN observation
+    #
+    # This is NOT called "degradation onset".
+    # It is only a reference observation boundary based on
+    # the C-MAPSS simulation assumption.
+    # --------------------------------------------------------
 
-    # 1. Kịch bản TBM (Time-Based Maintenance - Bảo trì định kỳ)
-    tbm_cycle_min: int = 130
-    tbm_cycle_max: int = 150
+    observation_cycle_min: int = 130
+    observation_cycle_max: int = 135
 
-    # 2. Kịch bản CBM (Condition-Based Maintenance - Bảo trì dự đoán)
-    cbm_rul_min: int = 15
-    cbm_rul_max: int = 35
+    # --------------------------------------------------------
+    # Rare abnormal trajectory
+    # --------------------------------------------------------
 
-    # --- TẬP TEST: Mô phỏng máy đang chạy ---
-    test_fraction_min: float = 0.15
-    test_fraction_max: float = 0.65
+    rare_fault_probability: float = 0.20
+
+    # Maximum duration of a synthetic abnormal segment
+    rare_fault_max_duration: int = 10
+
+    # Maximum number of cycles before observation cutoff
+    # where the abnormal segment may begin.
+    rare_fault_max_start_before_cutoff: int = 20
+
+    # Magnitude of synthetic perturbation
+    rare_fault_magnitude_min: float = 0.03
+    rare_fault_magnitude_max: float = 0.10
+
+    # Available synthetic rare-fault patterns
+    rare_fault_types: tuple[str, ...] = (
+        "plateau",
+        "drop",
+        "drift",
+    )
+
+    # --------------------------------------------------------
+    # TEST
+    #
+    # Initial amount of data available to the model.
+    # --------------------------------------------------------
+
+    test_fraction_min: float = 0.10
+    test_fraction_max: float = 0.30
 
 
 # ============================================================
-# C-MAPSS COLUMN DEFINITION
+# SENSOR DEFINITION
 # ============================================================
 
 SENSORS = [
@@ -67,19 +114,51 @@ SENSORS = [
 ]
 
 
+# ============================================================
+# LOAD C-MAPSS
+# ============================================================
+
 def load_cmapss_train(config: SplitConfig):
     """
-    Load C-MAPSS TRAIN và trả về DataFrame + engine trajectories.
+    Load C-MAPSS TRAIN.
+
+    Returns
+    -------
+    df:
+        Original dataframe containing the selected sensors.
+
+    engine_data:
+        Dictionary
+
+            {
+                engine_id: ndarray(n_cycles, n_sensors)
+            }
+
+        These trajectories are NEVER modified.
     """
 
     sensor_names = [
-        "T2", "T24", "T30", "T50",
-        "P2", "P15", "P30",
-        "Nf", "Nc", "epr",
-        "Ps30", "phi", "NRf", "NRc",
-        "BPR", "farB", "htBleed",
-        "Nfdmd", "PCNfRdmd",
-        "W31", "W32",
+        "T2",
+        "T24",
+        "T30",
+        "T50",
+        "P2",
+        "P15",
+        "P30",
+        "Nf",
+        "Nc",
+        "epr",
+        "Ps30",
+        "phi",
+        "NRf",
+        "NRc",
+        "BPR",
+        "farB",
+        "htBleed",
+        "Nfdmd",
+        "PCNfRdmd",
+        "W31",
+        "W32",
     ]
 
     columns = [
@@ -90,10 +169,6 @@ def load_cmapss_train(config: SplitConfig):
         "op3",
     ] + sensor_names
 
-    # --------------------------------------------------------
-    # Load raw C-MAPSS
-    # --------------------------------------------------------
-
     df = pd.read_csv(
         config.data_path,
         sep=r"\s+",
@@ -101,21 +176,9 @@ def load_cmapss_train(config: SplitConfig):
         names=columns,
     )
 
-    # --------------------------------------------------------
-    # Chỉ giữ metadata + sensors sử dụng
-    # --------------------------------------------------------
-
     df = df[
         ["unit_number", "cycles"] + SENSORS
     ].copy()
-
-    # --------------------------------------------------------
-    # Chuyển thành:
-    #
-    # {
-    #     engine_id: ndarray(n_cycles, n_sensors)
-    # }
-    # --------------------------------------------------------
 
     engine_data = {}
 
@@ -132,25 +195,585 @@ def load_cmapss_train(config: SplitConfig):
 
 
 # ============================================================
-# MAIN EXPERIMENT SPLIT
+# OBSERVATION CUTOFF
 # ============================================================
 
-def prepare_cmapss_split(config: SplitConfig = None):
+def sample_observation_cutoff(
+    n_cycles: int,
+    config: SplitConfig,
+    rng: np.random.Generator,
+) -> int:
+    """
+    Sample the observation cutoff for a training engine.
+
+    The cutoff is a simulation boundary.
+
+    It is NOT treated as:
+        - degradation onset
+        - failure time
+        - ground-truth event
+
+    If an engine is shorter than the requested reference region,
+    its actual trajectory length is used safely.
+    """
+
+    target_cycle = rng.integers(
+        config.observation_cycle_min,
+        config.observation_cycle_max + 1,
+    )
+
+    cutoff = min(
+        target_cycle,
+        n_cycles,
+    )
+
+    return max(1, cutoff)
+
+
+# ============================================================
+# SENSOR NORMALIZATION FOR FAULT INJECTION
+# ============================================================
+
+def _sensor_scale(
+    trajectory: np.ndarray,
+    sensor_index: int,
+) -> float:
+    """
+    Estimate local noise scale of one sensor.
+
+    The scale is based on first differences rather than
+    the global amplitude of the signal.
+
+    This allows synthetic abnormalities to be defined
+    relative to the natural sensor fluctuation.
+    """
+
+    values = trajectory[:, sensor_index]
+
+    if len(values) < 3:
+        return 1.0
+
+    differences = np.diff(values)
+
+    scale = np.median(
+        np.abs(differences)
+    )
+
+    if scale <= 1e-8:
+        scale = np.std(differences)
+
+    if scale <= 1e-8:
+        scale = 1.0
+
+    return float(scale)
+
+
+# ============================================================
+# RARE FAULT: PLATEAU
+# ============================================================
+
+def inject_plateau(
+    trajectory: np.ndarray,
+    start: int,
+    end: int,
+    sensor_index: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Create a temporary plateau while preserving a small amount
+    of natural sensor fluctuation.
+    """
+
+    result = trajectory.copy()
+
+    values = result[:, sensor_index]
+
+    scale = _sensor_scale(
+        trajectory,
+        sensor_index,
+    )
+
+    plateau_value = values[start]
+
+    noise = rng.normal(
+        loc=0.0,
+        scale=scale,
+        size=end - start,
+    )
+
+    result[start:end, sensor_index] = (
+        plateau_value + noise
+    )
+
+    return result
+
+
+# ============================================================
+# RARE FAULT: DROP
+# ============================================================
+
+def inject_drop(
+    trajectory: np.ndarray,
+    start: int,
+    end: int,
+    sensor_index: int,
+    magnitude: float,
+) -> np.ndarray:
+    """
+    Create a temporary downward abnormal behavior.
+
+    The perturbation is defined relative to local sensor noise.
+    A smooth transition is used instead of an instantaneous jump.
+    """
+
+    result = trajectory.copy()
+
+    scale = _sensor_scale(
+        trajectory,
+        sensor_index,
+    )
+
+    # magnitude is interpreted as number of local-noise scales
+    offset = magnitude * scale
+
+    duration = end - start
+
+    if duration <= 0:
+        return result
+
+    # Smoothly enter the abnormal region
+    drop = np.linspace(
+        0.0,
+        -offset,
+        duration,
+    )
+
+    result[start:end, sensor_index] += drop
+
+    return result
+
+
+# ============================================================
+# RARE FAULT: DRIFT
+# ============================================================
+
+def inject_drift(
+    trajectory: np.ndarray,
+    start: int,
+    end: int,
+    sensor_index: int,
+    magnitude: float,
+) -> np.ndarray:
+    """
+    Create a temporary local drift.
+
+    The perturbation gradually increases during the
+    abnormal segment.
+    """
+
+    result = trajectory.copy()
+
+    scale = _sensor_scale(
+        trajectory,
+        sensor_index,
+    )
+
+    offset = magnitude * scale
+
+    duration = end - start
+
+    if duration <= 0:
+        return result
+
+    drift = np.linspace(
+        0.0,
+        -offset,
+        duration,
+    )
+
+    result[start:end, sensor_index] += drift
+
+    return result
+
+
+# ============================================================
+# RARE FAULT GENERATOR
+# ============================================================
+
+def inject_rare_fault(
+    trajectory: np.ndarray,
+    cutoff: int,
+    config: SplitConfig,
+    rng: np.random.Generator,
+):
+    """
+    Inject ONE short rare abnormal pattern before the
+    observation cutoff.
+
+    Important:
+        - trajectory length does not change
+        - original trajectory is not modified
+        - only the observed portion is modified
+        - only a small number of sensors are affected
+
+    Returns
+    -------
+    modified_trajectory
+    fault_metadata
+    """
+
+    result = trajectory.copy()
+
+    n_sensors = result.shape[1]
+
+    # --------------------------------------------------------
+    # Select fault type
+    # --------------------------------------------------------
+
+    fault_type = rng.choice(
+        config.rare_fault_types
+    )
+
+    # --------------------------------------------------------
+    # Select duration
+    # --------------------------------------------------------
+
+    max_duration = min(
+        config.rare_fault_max_duration,
+        cutoff,
+    )
+
+    if max_duration < 2:
+        return result, None
+
+    duration = int(
+        rng.integers(
+            2,
+            max_duration + 1,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Select start position
+    #
+    # Fault is intentionally placed near the end of the
+    # observed trajectory, but not necessarily immediately
+    # before the cutoff.
+    # --------------------------------------------------------
+
+    earliest_start = max(
+        0,
+        cutoff
+        - config.rare_fault_max_start_before_cutoff
+        - duration,
+    )
+
+    latest_start = max(
+        earliest_start,
+        cutoff - duration,
+    )
+
+    start = int(
+        rng.integers(
+            earliest_start,
+            latest_start + 1,
+        )
+    )
+
+    end = start + duration
+
+    # --------------------------------------------------------
+    # Affect only ONE sensor for the first version.
+    #
+    # This prevents the synthetic fault from becoming
+    # trivially recognizable across all sensors.
+    # --------------------------------------------------------
+
+    sensor_index = int(
+        rng.integers(
+            0,
+            n_sensors,
+        )
+    )
+
+    magnitude = float(
+        rng.uniform(
+            config.rare_fault_magnitude_min,
+            config.rare_fault_magnitude_max,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Apply fault
+    # --------------------------------------------------------
+
+    if fault_type == "plateau":
+
+        result = inject_plateau(
+            result,
+            start,
+            end,
+            sensor_index,
+            rng,
+        )
+
+    elif fault_type == "drop":
+
+        result = inject_drop(
+            result,
+            start,
+            end,
+            sensor_index,
+            magnitude,
+        )
+
+    elif fault_type == "drift":
+
+        result = inject_drift(
+            result,
+            start,
+            end,
+            sensor_index,
+            magnitude,
+        )
+
+    else:
+        raise ValueError(
+            f"Unknown rare fault type: {fault_type}"
+        )
+
+    # --------------------------------------------------------
+    # Metadata
+    # --------------------------------------------------------
+
+    metadata = {
+        "has_rare_fault": True,
+        "fault_type": fault_type,
+        "fault_sensor": SENSORS[sensor_index],
+        "fault_sensor_index": sensor_index,
+        "fault_start": start,
+        "fault_end": end,
+        "fault_duration": duration,
+        "fault_magnitude": magnitude,
+    }
+
+    return result, metadata
+
+
+# ============================================================
+# PREPARE TRAIN DATA
+# ============================================================
+
+def prepare_train_data(
+    train_ids,
+    engine_data,
+    config: SplitConfig,
+    rng: np.random.Generator,
+):
+    """
+    Prepare observed training trajectories.
+
+    Most engines:
+        normal observation
+
+A small fraction:
+        normal observation + rare abnormal pattern
+
+    No trajectory is extended beyond its original length.
+    """
+
+    train_data = {}
+    train_metadata = {}
+
+    for engine_id in train_ids:
+
+        full = engine_data[engine_id]
+
+        n_cycles = len(full)
+
+        # ----------------------------------------------------
+        # Observation cutoff
+        # ----------------------------------------------------
+
+        cutoff = sample_observation_cutoff(
+            n_cycles,
+            config,
+            rng,
+        )
+
+        observed = full[:cutoff].copy()
+
+        # ----------------------------------------------------
+        # Rare fault decision
+        # ----------------------------------------------------
+
+        inject_fault = (
+            rng.random()
+            < config.rare_fault_probability
+        )
+
+        if inject_fault:
+
+            observed, fault_metadata = inject_rare_fault(
+                trajectory=observed,
+                cutoff=len(observed),
+                config=config,
+                rng=rng,
+            )
+
+        else:
+
+            fault_metadata = {
+                "has_rare_fault": False,
+                "fault_type": None,
+                "fault_sensor": None,
+                "fault_sensor_index": None,
+                "fault_start": None,
+                "fault_end": None,
+                "fault_duration": 0,
+                "fault_magnitude": 0.0,
+            }
+
+        # ----------------------------------------------------
+        # Save observed trajectory
+        # ----------------------------------------------------
+
+        train_data[engine_id] = observed
+
+        # ----------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------
+
+        train_metadata[engine_id] = {
+            "observed_cycles": len(observed),
+            "actual_rul_at_stop": n_cycles - len(observed),
+            "total_cycles": n_cycles,
+
+            # Observation ends before original failure.
+            "is_censored": len(observed) < n_cycles,
+
+            **fault_metadata,
+        }
+
+    return train_data, train_metadata
+
+
+# ============================================================
+# PREPARE TEST DATA
+# ============================================================
+
+def prepare_test_data(
+    test_ids,
+    engine_data,
+    config: SplitConfig,
+):
+    """
+    Prepare initial observations for realtime testing.
+
+    Only a small fraction of the trajectory is exposed.
+
+    The complete original trajectory remains in engine_data.
+    """
+
+    test_rng = np.random.default_rng(
+        config.random_seed + 1
+    )
+
+    test_data = {}
+    test_observation_points = {}
+
+    for engine_id in test_ids:
+
+        full = engine_data[engine_id]
+
+        n_cycles = len(full)
+
+        fraction = test_rng.uniform(
+            config.test_fraction_min,
+            config.test_fraction_max,
+        )
+
+        # ----------------------------------------------------
+        # ceil instead of int()
+        #
+        # This prevents the actual observation fraction from
+        # systematically falling below the requested minimum.
+        # ----------------------------------------------------
+
+        end = int(
+            np.ceil(
+                n_cycles * fraction
+            )
+        )
+
+        end = max(1, end)
+
+        # Do not expose the original failure at initialization.
+        end = min(
+            end,
+            n_cycles - 1,
+        )
+
+        test_data[engine_id] = (
+            full[:end].copy()
+        )
+
+        test_observation_points[engine_id] = end
+
+    return (
+        test_data,
+        test_observation_points,
+    )
+
+
+# ============================================================
+# MAIN SPLIT
+# ============================================================
+
+def prepare_cmapss_split(
+    config: SplitConfig | None = None,
+):
+    """
+    Main entry point.
+
+    Returns
+    -------
+    dict
+        {
+            "df": original dataframe,
+            "engine_data": original full trajectories,
+
+            "train_data": observed training trajectories,
+            "train_ids": training engine IDs,
+            "train_metadata": metadata,
+
+            "test_data": initial test observations,
+            "test_ids": testing engine IDs,
+            "test_observation_points": current observation points,
+
+            "sensors": selected sensor names,
+            "config": configuration,
+        }
+    """
 
     if config is None:
         config = SplitConfig()
 
-    # --------------------------------------------------------
-    # 1. Load data
-    # --------------------------------------------------------
+    # ========================================================
+    # 1. LOAD ORIGINAL DATA
+    # ========================================================
 
-    df, engine_data = load_cmapss_train(config)
+    df, engine_data = load_cmapss_train(
+        config
+    )
 
-    rng = np.random.default_rng(config.random_seed)
+    rng = np.random.default_rng(
+        config.random_seed
+    )
 
-    # --------------------------------------------------------
-    # 2. TẦNG 1: Split ENGINE 70% Train / 30% Test
-    # --------------------------------------------------------
+    # ========================================================
+    # 2. ENGINE-LEVEL TRAIN / TEST SPLIT
+    # ========================================================
 
     engine_ids = np.array(
         sorted(engine_data.keys())
@@ -159,7 +782,8 @@ def prepare_cmapss_split(config: SplitConfig = None):
     rng.shuffle(engine_ids)
 
     n_train = int(
-        len(engine_ids) * config.train_ratio
+        len(engine_ids)
+        * config.train_ratio
     )
 
     train_ids = sorted(
@@ -170,139 +794,74 @@ def prepare_cmapss_split(config: SplitConfig = None):
         engine_ids[n_train:].tolist()
     )
 
-    # --------------------------------------------------------
-    # 3. TẦNG 2: Kịch bản bảo trì cho tập Train
-    #    - 70% TBM (Bảo trì định kỳ: cắt cycle 130-150)
-    #    - 30% CBM (Bảo trì dự đoán: cắt khi RUL còn 15-35)
-    # --------------------------------------------------------
+    # ========================================================
+    # 3. PREPARE TRAIN
+    # ========================================================
 
-    train_ids_shuffled = np.array(train_ids).copy()
-    rng.shuffle(train_ids_shuffled)
-
-    n_tbm = int(len(train_ids) * config.tbm_ratio)
-    tbm_ids = sorted(train_ids_shuffled[:n_tbm].tolist())
-    cbm_ids = sorted(train_ids_shuffled[n_tbm:].tolist())
-
-    train_data = {}
-    train_metadata = {}
-
-    # 3.1. Xử lý nhóm TBM (Time-Based Maintenance)
-    for engine_id in tbm_ids:
-        full = engine_data[engine_id]
-        n_cycles = len(full)
-
-        target_cycle = rng.integers(
-            config.tbm_cycle_min,
-            config.tbm_cycle_max + 1,
-        )
-
-        end = min(target_cycle, n_cycles - 1)
-        end = max(1, end)
-
-        train_data[engine_id] = full[:end]
-        train_metadata[engine_id] = {
-            "maintenance_type": "TBM",
-            "is_extended": False,  # Censored / Normal (chưa tới failure)
-            "observed_cycles": end,
-            "actual_rul_at_stop": n_cycles - end,
-            "total_cycles": n_cycles,
-        }
-
-    # 3.2. Xử lý nhóm CBM (Condition-Based Maintenance)
-    for engine_id in cbm_ids:
-        full = engine_data[engine_id]
-        n_cycles = len(full)
-
-        target_rul = rng.integers(
-            config.cbm_rul_min,
-            config.cbm_rul_max + 1,
-        )
-
-        end = max(1, n_cycles - target_rul)
-        end = min(end, n_cycles - 1)
-
-        train_data[engine_id] = full[:end]
-        train_metadata[engine_id] = {
-            "maintenance_type": "CBM",
-            "is_extended": True,  # Degraded / Event (quan sát đến khi phát hiện dấu hiệu suy thoái)
-            "observed_cycles": end,
-            "actual_rul_at_stop": n_cycles - end,
-            "total_cycles": n_cycles,
-        }
-
-    # --------------------------------------------------------
-    # 4. TẬP TEST: Initial Observation (Mô phỏng máy đang chạy: 15% - 65%)
-    # Đây chỉ là trạng thái quan sát tại thời điểm
-    # experiment bắt đầu.
-    # Chưa phải realtime simulation.
-    # Realtime simulator sẽ reveal thêm cycle sau này.
-    # --------------------------------------------------------
-
-    test_rng = np.random.default_rng(
-        config.random_seed + 1
+    train_data, train_metadata = prepare_train_data(
+        train_ids=train_ids,
+        engine_data=engine_data,
+        config=config,
+        rng=rng,
     )
 
-    test_data = {}
-    test_observation_points = {}
+    # ========================================================
+    # 4. PREPARE TEST
+    # ========================================================
 
-    for engine_id in test_ids:
-        full = engine_data[engine_id]
-        n_cycles = len(full)
+    (
+        test_data,
+        test_observation_points,
+    ) = prepare_test_data(
+        test_ids=test_ids,
+        engine_data=engine_data,
+        config=config,
+    )
 
-        fraction = test_rng.uniform(
-            config.test_fraction_min,
-            config.test_fraction_max,
-        )
-
-        end = max(
-            1,
-            int(n_cycles * fraction),
-        )
-
-        # Không expose failure ngay từ initial state.
-        end = min(
-            end,
-            n_cycles - 1,
-        )
-
-        # Phần data hiện đang được quan sát.
-        test_data[engine_id] = full[:end].copy()
-
-        # Lưu lại current observation point.
-        # Simulator sẽ dùng nó để biết cần reveal
-        # từ cycle nào tiếp theo.
-        test_observation_points[engine_id] = end
-
-    # --------------------------------------------------------
-    # 5. Return tất cả những gì notebook cần
-    # --------------------------------------------------------
+    # ========================================================
+    # 5. RETURN
+    # ========================================================
 
     return {
+        # ----------------------------------------------------
+        # Original data
+        # ----------------------------------------------------
+
         "df": df,
 
-        # FULL trajectories.
-        # Giữ nguyên để simulator và evaluation sử dụng.
-        # Không đưa trực tiếp vào model.
         "engine_data": engine_data,
 
-        # 70% development (Train)
+        # ----------------------------------------------------
+        # TRAIN
+        # ----------------------------------------------------
+
         "train_data": train_data,
+
         "train_ids": train_ids,
-        "tbm_ids": tbm_ids,
-        "cbm_ids": cbm_ids,
+
         "train_metadata": train_metadata,
 
-        # 30% test
-        # Chỉ chứa phần đã được observe tại thời điểm bắt đầu.
+        # ----------------------------------------------------
+        # TEST
+        # ----------------------------------------------------
+
         "test_data": test_data,
+
         "test_ids": test_ids,
 
-        # Cycle hiện tại mà mỗi test engine đã được observe.
-        "test_observation_points": test_observation_points,
+        "test_observation_points": (
+            test_observation_points
+        ),
 
-        # Sensors đang sử dụng
+        # ----------------------------------------------------
+        # Sensors
+        # ----------------------------------------------------
+
         "sensors": SENSORS,
 
-        # Config
+        # ----------------------------------------------------
+        # Configuration
+        # ----------------------------------------------------
+
         "config": config,
     }

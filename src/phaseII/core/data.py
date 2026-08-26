@@ -25,6 +25,7 @@ class EngineRecord:
     engine_id: str
     latent_seq: np.ndarray   # shape (T, latent_dim) -- output encoder Phase I, ĐÃ cắt tại [:event_bin+1] nếu có event
     n_bins: int              # số bin thực sự dùng = len(latent_seq); bằng event_bin+1 nếu có event
+    event_observed: bool
     event_bin: int | None    # bin đầu tiên phát hiện degradation onset (0-indexed);
                              # None nếu engine chưa vượt qua elbow trong cửa sổ quan sát (censored).
 

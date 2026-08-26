@@ -30,34 +30,58 @@ def build_engine_records(
     train_metadata: dict[int, dict],
 ) -> list[EngineRecord]:
     """
-    event_bin = bin cuối cùng của chính latent_seq engine đó, NẾU là
-    extended -- không tính lại từ elbow_cycle cố định.
+    Build một EngineRecord cho mỗi engine.
 
-    Lý do: data.py đã ngẫu nhiên hóa độ dài quan sát cho từng engine rồi
-    (qua extended_max_extra). Dùng lại đúng độ dài đó làm event_bin, thay
-    vì áp một công thức chung, giữ được đúng sự đa dạng đã thiết kế và
-    tránh length trở thành shortcut lộ liễu cho model.
+    Với mỗi engine:
+    - n_bins: số latent timestep thực tế quan sát được.
+    - event_observed:
+        True  -> engine extended, event được quan sát.
+        False -> engine normal, bị right-censored.
+    - event_bin:
+        n_bins - 1 nếu event được quan sát.
+        None nếu bị right-censored.
 
-    Về mặt ngữ nghĩa, điều này cũng khớp thực tế hơn: ta không thực sự
-    biết chính xác cycle nào là "elbow" -- ta chỉ biết "quan sát dừng lại
-    ở đây, và tại đây engine đã qua giai đoạn suy thoái" -- đúng như log
-    bảo trì thật chỉ cho biết thời điểm ghi nhận, không cho biết thời
-    điểm khởi phát chính xác.
+    Không tạo hazard target [0, 0, ..., 1] ở đây.
+    Target sẽ được tạo sau trong phase2/data.py.
     """
-    records = []
-    for engine_id, latent_seq in latent_data.items():
-        is_extended = train_metadata[engine_id]["is_extended"]
-        n_bins = latent_seq.shape[0]
-        event_bin = (n_bins - 1) if is_extended else None
 
-        records.append(
-            EngineRecord(
-                engine_id=str(engine_id),
-                latent_seq=latent_seq.astype(np.float32),
-                n_bins=n_bins,
-                event_bin=event_bin,
-            )
+    records = []
+
+    for engine_id, latent_seq in latent_data.items():
+
+        # --------------------------------------------------
+        # 1. Lấy thông tin extended / normal
+        # --------------------------------------------------
+        is_extended = train_metadata[engine_id]["is_extended"]
+
+        # --------------------------------------------------
+        # 2. Độ dài thực tế của latent sequence
+        # --------------------------------------------------
+        n_bins = latent_seq.shape[0]
+
+        # --------------------------------------------------
+        # 3. Xác định event
+        # --------------------------------------------------
+        if is_extended:
+            event_observed = True
+            event_bin = n_bins - 1
+        else:
+            event_observed = False
+            event_bin = None
+
+        # --------------------------------------------------
+        # 4. Tạo EngineRecord
+        # --------------------------------------------------
+        record = EngineRecord(
+            engine_id=str(engine_id),
+            latent_seq=latent_seq.astype(np.float32),
+            n_bins=n_bins,
+            event_observed=event_observed,
+            event_bin=event_bin,
         )
+
+        records.append(record)
+
     return records
 
 
