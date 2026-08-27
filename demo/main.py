@@ -14,19 +14,26 @@ from demo.core.data import (
 
 
 config = SplitConfig(
-    data_path="demo/data/train_FD001.txt",
+    data_path="demo/data/train_FD002.txt",
 
     train_ratio=0.70,
 
-    tbm_ratio=0.70,
-    tbm_cycle_min=130,
-    tbm_cycle_max=150,
+    observation_cycle_min=130,
+    observation_cycle_max=135,
 
-    cbm_rul_min=15,
-    cbm_rul_max=35,
+    rare_fault_probability=0.20,
+    rare_fault_max_duration=10,
+    rare_fault_max_start_before_cutoff=20,
+    rare_fault_magnitude_min=0.03,
+    rare_fault_magnitude_max=0.10,
+    rare_fault_types=(
+        "plateau",
+        "drop",
+        "drift",
+    ),
 
-    test_fraction_min=0.15,
-    test_fraction_max=0.65,
+    test_fraction_min=0.10,
+    test_fraction_max=0.30,
 
     random_seed=42,
 )

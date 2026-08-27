@@ -43,7 +43,7 @@ class SplitConfig:
     # Dataset
     # --------------------------------------------------------
 
-    data_path: str = "demo/data/train_FD001.txt"
+    data_path: str = "demo/data/train_FD002.txt"
     random_seed: int = 42
 
     # --------------------------------------------------------
@@ -98,8 +98,38 @@ class SplitConfig:
 
 
 # ============================================================
-# SENSOR DEFINITION
+# OPERATIONAL SETTINGS & SENSOR DEFINITIONS
 # ============================================================
+
+OP_SETTINGS = [
+    "op1",
+    "op2",
+    "op3",
+]
+
+ALL_SENSORS = [
+    "T2",
+    "T24",
+    "T30",
+    "T50",
+    "P2",
+    "P15",
+    "P30",
+    "Nf",
+    "Nc",
+    "epr",
+    "Ps30",
+    "phi",
+    "NRf",
+    "NRc",
+    "BPR",
+    "farB",
+    "htBleed",
+    "Nfdmd",
+    "PCNfRdmd",
+    "W31",
+    "W32",
+]
 
 SENSORS = [
     "T24",
@@ -113,6 +143,17 @@ SENSORS = [
     "W32",
 ]
 
+DEFAULT_FAULT_METADATA = {
+    "has_rare_fault": False,
+    "fault_type": None,
+    "fault_sensor": None,
+    "fault_sensor_index": None,
+    "fault_start": None,
+    "fault_end": None,
+    "fault_duration": 0,
+    "fault_magnitude": 0.0,
+}
+
 
 # ============================================================
 # LOAD C-MAPSS
@@ -125,49 +166,21 @@ def load_cmapss_train(config: SplitConfig):
     Returns
     -------
     df:
-        Original dataframe containing the selected sensors.
+        Original dataframe containing the selected sensors and operational settings.
 
     engine_data:
-        Dictionary
-
-            {
-                engine_id: ndarray(n_cycles, n_sensors)
-            }
-
+        Dictionary {engine_id: ndarray(n_cycles, n_sensors)}
         These trajectories are NEVER modified.
-    """
 
-    sensor_names = [
-        "T2",
-        "T24",
-        "T30",
-        "T50",
-        "P2",
-        "P15",
-        "P30",
-        "Nf",
-        "Nc",
-        "epr",
-        "Ps30",
-        "phi",
-        "NRf",
-        "NRc",
-        "BPR",
-        "farB",
-        "htBleed",
-        "Nfdmd",
-        "PCNfRdmd",
-        "W31",
-        "W32",
-    ]
+    op_data:
+        Dictionary {engine_id: ndarray(n_cycles, 3)}
+        Operational settings (op1, op2, op3) for each cycle.
+    """
 
     columns = [
         "unit_number",
         "cycles",
-        "op1",
-        "op2",
-        "op3",
-    ] + sensor_names
+    ] + OP_SETTINGS + ALL_SENSORS
 
     df = pd.read_csv(
         config.data_path,
@@ -177,10 +190,11 @@ def load_cmapss_train(config: SplitConfig):
     )
 
     df = df[
-        ["unit_number", "cycles"] + SENSORS
+        ["unit_number", "cycles"] + OP_SETTINGS + SENSORS
     ].copy()
 
     engine_data = {}
+    op_data = {}
 
     for engine_id, group in df.groupby("unit_number"):
 
@@ -191,7 +205,12 @@ def load_cmapss_train(config: SplitConfig):
             .to_numpy(dtype=np.float32)
         )
 
-    return df, engine_data
+        op_data[int(engine_id)] = (
+            group[OP_SETTINGS]
+            .to_numpy(dtype=np.float32)
+        )
+
+    return df, engine_data, op_data
 
 
 # ============================================================
@@ -231,7 +250,7 @@ def sample_observation_cutoff(
 
 
 # ============================================================
-# SENSOR NORMALIZATION FOR FAULT INJECTION
+# SENSOR NORMALIZATION FOR FAULT INJECTION (CHỈ DÙNG CHO NHIỄU)
 # ============================================================
 
 def _sensor_scale(
@@ -239,37 +258,24 @@ def _sensor_scale(
     sensor_index: int,
 ) -> float:
     """
-    Estimate local noise scale of one sensor.
-
-    The scale is based on first differences rather than
-    the global amplitude of the signal.
-
-    This allows synthetic abnormalities to be defined
-    relative to the natural sensor fluctuation.
+    Ước lượng độ rung lắc tự nhiên (nhiễu) giữa 2 chu kỳ liền kề.
+    Dùng để tạo nhiễu trắng cho Plateau.
     """
-
     values = trajectory[:, sensor_index]
-
     if len(values) < 3:
         return 1.0
 
     differences = np.diff(values)
-
-    scale = np.median(
-        np.abs(differences)
-    )
-
+    scale = np.median(np.abs(differences))
     if scale <= 1e-8:
         scale = np.std(differences)
-
     if scale <= 1e-8:
         scale = 1.0
-
     return float(scale)
 
 
 # ============================================================
-# RARE FAULT: PLATEAU
+# RARE FAULT: PLATEAU (KẸT GIÁ TRỊ)
 # ============================================================
 
 def inject_plateau(
@@ -280,36 +286,20 @@ def inject_plateau(
     rng: np.random.Generator,
 ) -> np.ndarray:
     """
-    Create a temporary plateau while preserving a small amount
-    of natural sensor fluctuation.
+    Tạo lỗi kẹt tín hiệu (Plateau) tại giá trị start + thêm nhiễu nhẹ.
     """
-
     result = trajectory.copy()
-
     values = result[:, sensor_index]
-
-    scale = _sensor_scale(
-        trajectory,
-        sensor_index,
-    )
+    scale = _sensor_scale(trajectory, sensor_index)
 
     plateau_value = values[start]
-
-    noise = rng.normal(
-        loc=0.0,
-        scale=scale,
-        size=end - start,
-    )
-
-    result[start:end, sensor_index] = (
-        plateau_value + noise
-    )
-
+    noise = rng.normal(loc=0.0, scale=scale, size=end - start)
+    result[start:end, sensor_index] = plateau_value + noise
     return result
 
 
 # ============================================================
-# RARE FAULT: DROP
+# RARE FAULT: DROP (SỤT BẬC THANG TẠM THỜI)
 # ============================================================
 
 def inject_drop(
@@ -320,41 +310,25 @@ def inject_drop(
     magnitude: float,
 ) -> np.ndarray:
     """
-    Create a temporary downward abnormal behavior.
-
-    The perturbation is defined relative to local sensor noise.
-    A smooth transition is used instead of an instantaneous jump.
+    Sụt giảm tức thì một lượng (3% - 10% giá trị cảm biến) trong [start:end].
     """
-
     result = trajectory.copy()
+    values = trajectory[:, sensor_index]
 
-    scale = _sensor_scale(
-        trajectory,
-        sensor_index,
-    )
-
-    # magnitude is interpreted as number of local-noise scales
-    offset = magnitude * scale
+    # Tính offset theo 3% - 10% giá trị thực của cảm biến
+    base_val = np.abs(values[start]) if np.abs(values[start]) > 1e-4 else 1.0
+    offset = magnitude * base_val
 
     duration = end - start
-
     if duration <= 0:
         return result
 
-    # Smoothly enter the abnormal region
-    drop = np.linspace(
-        0.0,
-        -offset,
-        duration,
-    )
-
-    result[start:end, sensor_index] += drop
-
+    result[start:end, sensor_index] -= offset
     return result
 
 
 # ============================================================
-# RARE FAULT: DRIFT
+# RARE FAULT: DRIFT (TRÔI DỐC TUYẾN TÍNH) - ĐÃ ĐỒNG BỘ
 # ============================================================
 
 def inject_drift(
@@ -365,39 +339,26 @@ def inject_drift(
     magnitude: float,
 ) -> np.ndarray:
     """
-    Create a temporary local drift.
-
-    The perturbation gradually increases during the
-    abnormal segment.
+    Trôi dốc tuyến tính từ 0 đến -offset (3% - 10% giá trị cảm biến).
     """
-
     result = trajectory.copy()
+    values = trajectory[:, sensor_index]
 
-    scale = _sensor_scale(
-        trajectory,
-        sensor_index,
-    )
-
-    offset = magnitude * scale
+    # ĐỒNG BỘ: Tính offset theo giá trị thực của cảm biến
+    base_val = np.abs(values[start]) if np.abs(values[start]) > 1e-4 else 1.0
+    offset = magnitude * base_val
 
     duration = end - start
-
     if duration <= 0:
         return result
 
-    drift = np.linspace(
-        0.0,
-        -offset,
-        duration,
-    )
-
+    drift = np.linspace(0.0, -offset, duration)
     result[start:end, sensor_index] += drift
-
     return result
 
 
 # ============================================================
-# RARE FAULT GENERATOR
+# RARE FAULT GENERATOR (ĐIỀU PHỐI TIÊM LỖI)
 # ============================================================
 
 def inject_rare_fault(
@@ -407,144 +368,41 @@ def inject_rare_fault(
     rng: np.random.Generator,
 ):
     """
-    Inject ONE short rare abnormal pattern before the
-    observation cutoff.
-
-    Important:
-        - trajectory length does not change
-        - original trajectory is not modified
-        - only the observed portion is modified
-        - only a small number of sensors are affected
-
-    Returns
-    -------
-    modified_trajectory
-    fault_metadata
+    Điều phối tiêm ngẫu nhiên 1 lỗi vào 1 cảm biến trước điểm cutoff.
     """
-
     result = trajectory.copy()
-
     n_sensors = result.shape[1]
 
-    # --------------------------------------------------------
-    # Select fault type
-    # --------------------------------------------------------
+    max_duration = min(config.rare_fault_max_duration, cutoff)
 
-    fault_type = rng.choice(
-        config.rare_fault_types
-    )
-
-    # --------------------------------------------------------
-    # Select duration
-    # --------------------------------------------------------
-
-    max_duration = min(
-        config.rare_fault_max_duration,
-        cutoff,
-    )
-
+    # Trả về metadata mặc định an toàn nếu cutoff quá ngắn
     if max_duration < 2:
-        return result, None
+        return result, DEFAULT_FAULT_METADATA.copy()
 
-    duration = int(
-        rng.integers(
-            2,
-            max_duration + 1,
-        )
-    )
+    fault_type = rng.choice(config.rare_fault_types)
+    duration = int(rng.integers(2, max_duration + 1))
 
-    # --------------------------------------------------------
-    # Select start position
-    #
-    # Fault is intentionally placed near the end of the
-    # observed trajectory, but not necessarily immediately
-    # before the cutoff.
-    # --------------------------------------------------------
-
-    earliest_start = max(
-        0,
-        cutoff
-        - config.rare_fault_max_start_before_cutoff
-        - duration,
-    )
-
-    latest_start = max(
-        earliest_start,
-        cutoff - duration,
-    )
-
-    start = int(
-        rng.integers(
-            earliest_start,
-            latest_start + 1,
-        )
-    )
-
+    # FIX LOGIC VỊ TRÍ: Khớp chuẩn với rare_fault_max_start_before_cutoff
+    earliest_start = max(0, cutoff - config.rare_fault_max_start_before_cutoff)
+    latest_start = max(earliest_start, cutoff - duration)
+    start = int(rng.integers(earliest_start, latest_start + 1))
     end = start + duration
 
-    # --------------------------------------------------------
-    # Affect only ONE sensor for the first version.
-    #
-    # This prevents the synthetic fault from becoming
-    # trivially recognizable across all sensors.
-    # --------------------------------------------------------
-
-    sensor_index = int(
-        rng.integers(
-            0,
-            n_sensors,
-        )
-    )
-
-    magnitude = float(
-        rng.uniform(
-            config.rare_fault_magnitude_min,
-            config.rare_fault_magnitude_max,
-        )
-    )
-
-    # --------------------------------------------------------
-    # Apply fault
-    # --------------------------------------------------------
+    sensor_index = int(rng.integers(0, n_sensors))
+    magnitude = float(rng.uniform(config.rare_fault_magnitude_min, config.rare_fault_magnitude_max))
 
     if fault_type == "plateau":
-
-        result = inject_plateau(
-            result,
-            start,
-            end,
-            sensor_index,
-            rng,
-        )
-
+        result = inject_plateau(result, start, end, sensor_index, rng)
+        # Với plateau, biên độ thực chất là độ lệch chuẩn nhiễu
+        logged_magnitude = 0.0
     elif fault_type == "drop":
-
-        result = inject_drop(
-            result,
-            start,
-            end,
-            sensor_index,
-            magnitude,
-        )
-
+        result = inject_drop(result, start, end, sensor_index, magnitude)
+        logged_magnitude = magnitude
     elif fault_type == "drift":
-
-        result = inject_drift(
-            result,
-            start,
-            end,
-            sensor_index,
-            magnitude,
-        )
-
+        result = inject_drift(result, start, end, sensor_index, magnitude)
+        logged_magnitude = magnitude
     else:
-        raise ValueError(
-            f"Unknown rare fault type: {fault_type}"
-        )
-
-    # --------------------------------------------------------
-    # Metadata
-    # --------------------------------------------------------
+        raise ValueError(f"Unknown rare fault type: {fault_type}")
 
     metadata = {
         "has_rare_fault": True,
@@ -554,11 +412,10 @@ def inject_rare_fault(
         "fault_start": start,
         "fault_end": end,
         "fault_duration": duration,
-        "fault_magnitude": magnitude,
+        "fault_magnitude": logged_magnitude,
     }
 
     return result, metadata
-
 
 # ============================================================
 # PREPARE TRAIN DATA
@@ -567,6 +424,7 @@ def inject_rare_fault(
 def prepare_train_data(
     train_ids,
     engine_data,
+    op_data,
     config: SplitConfig,
     rng: np.random.Generator,
 ):
@@ -576,18 +434,20 @@ def prepare_train_data(
     Most engines:
         normal observation
 
-A small fraction:
+    A small fraction:
         normal observation + rare abnormal pattern
 
     No trajectory is extended beyond its original length.
     """
 
     train_data = {}
+    train_op_data = {}
     train_metadata = {}
 
     for engine_id in train_ids:
 
         full = engine_data[engine_id]
+        full_op = op_data[engine_id]
 
         n_cycles = len(full)
 
@@ -602,6 +462,7 @@ A small fraction:
         )
 
         observed = full[:cutoff].copy()
+        observed_op = full_op[:cutoff].copy()
 
         # ----------------------------------------------------
         # Rare fault decision
@@ -635,10 +496,11 @@ A small fraction:
             }
 
         # ----------------------------------------------------
-        # Save observed trajectory
+        # Save observed trajectory & operational settings
         # ----------------------------------------------------
 
         train_data[engine_id] = observed
+        train_op_data[engine_id] = observed_op
 
         # ----------------------------------------------------
         # Metadata
@@ -655,7 +517,7 @@ A small fraction:
             **fault_metadata,
         }
 
-    return train_data, train_metadata
+    return train_data, train_op_data, train_metadata
 
 
 # ============================================================
@@ -665,6 +527,7 @@ A small fraction:
 def prepare_test_data(
     test_ids,
     engine_data,
+    op_data,
     config: SplitConfig,
 ):
     """
@@ -680,11 +543,13 @@ def prepare_test_data(
     )
 
     test_data = {}
+    test_op_data = {}
     test_observation_points = {}
 
     for engine_id in test_ids:
 
         full = engine_data[engine_id]
+        full_op = op_data[engine_id]
 
         n_cycles = len(full)
 
@@ -718,10 +583,15 @@ def prepare_test_data(
             full[:end].copy()
         )
 
+        test_op_data[engine_id] = (
+            full_op[:end].copy()
+        )
+
         test_observation_points[engine_id] = end
 
     return (
         test_data,
+        test_op_data,
         test_observation_points,
     )
 
@@ -741,17 +611,21 @@ def prepare_cmapss_split(
     dict
         {
             "df": original dataframe,
-            "engine_data": original full trajectories,
+            "engine_data": original full trajectories (sensors),
+            "op_data": original full operational settings,
 
             "train_data": observed training trajectories,
+            "train_op_data": observed training operational settings,
             "train_ids": training engine IDs,
             "train_metadata": metadata,
 
             "test_data": initial test observations,
+            "test_op_data": initial test operational settings,
             "test_ids": testing engine IDs,
             "test_observation_points": current observation points,
 
             "sensors": selected sensor names,
+            "op_settings": operational setting names,
             "config": configuration,
         }
     """
@@ -763,7 +637,7 @@ def prepare_cmapss_split(
     # 1. LOAD ORIGINAL DATA
     # ========================================================
 
-    df, engine_data = load_cmapss_train(
+    df, engine_data, op_data = load_cmapss_train(
         config
     )
 
@@ -798,9 +672,10 @@ def prepare_cmapss_split(
     # 3. PREPARE TRAIN
     # ========================================================
 
-    train_data, train_metadata = prepare_train_data(
+    train_data, train_op_data, train_metadata = prepare_train_data(
         train_ids=train_ids,
         engine_data=engine_data,
+        op_data=op_data,
         config=config,
         rng=rng,
     )
@@ -811,10 +686,12 @@ def prepare_cmapss_split(
 
     (
         test_data,
+        test_op_data,
         test_observation_points,
     ) = prepare_test_data(
         test_ids=test_ids,
         engine_data=engine_data,
+        op_data=op_data,
         config=config,
     )
 
@@ -830,12 +707,14 @@ def prepare_cmapss_split(
         "df": df,
 
         "engine_data": engine_data,
+        "op_data": op_data,
 
         # ----------------------------------------------------
         # TRAIN
         # ----------------------------------------------------
 
         "train_data": train_data,
+        "train_op_data": train_op_data,
 
         "train_ids": train_ids,
 
@@ -846,6 +725,7 @@ def prepare_cmapss_split(
         # ----------------------------------------------------
 
         "test_data": test_data,
+        "test_op_data": test_op_data,
 
         "test_ids": test_ids,
 
@@ -854,10 +734,11 @@ def prepare_cmapss_split(
         ),
 
         # ----------------------------------------------------
-        # Sensors
+        # Sensors & Operational Settings
         # ----------------------------------------------------
 
         "sensors": SENSORS,
+        "op_settings": OP_SETTINGS,
 
         # ----------------------------------------------------
         # Configuration
