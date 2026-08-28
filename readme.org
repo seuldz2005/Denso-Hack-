@@ -192,43 +192,27 @@ một vấn đề phổ biến trong chẩn đoán máy móc là thiếu dữ li
   should change to *Frequency Domain* as it should lower the cost to run by apply
   a Physical Fact ...
 -
-** Phase I : Con1d Autoencoder [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]] & [[[pdf:BottleNeck.pdf::][this]]]
+** Phase I : Con1d Autoencoder
+*** Reference
+- [[[pdf:Dynamical Varaiational AE.pdf::][this paper]]][[[pdf:BottleNeck.pdf::][this]]]
+- [[pdf:Paper Please/ae2.pdf::1][this]]
 *** Structure
 - Basically the combination of Autoencoder (Neural Network) & Con1d is a type of
   structure inside the encoder/decoder of AE
-- So với Dense thuần (fully-connected) — tiết kiệm tham số cực lớn, quan trọng
-  với dữ liệu ít. Nếu dùng Dense, bạn phải "trải phẳng" window thành một vector
-  630 số (30×21), rồi nhân với ma trận trọng số đầy đủ để nén xuống latent — số
-  tham số tỷ lệ với 630 × kích_thước_lớp_ẩn, rất lớn. Conv1D chỉ cần học kernel
-  nhỏ (5 giá trị × số channel) dùng lại nhiều lần — ít tham số hơn nhiều bậc,
-  đúng tinh thần "lightweight, tránh overfit với ít dữ liệu suy thoái" đã theo
-  xuyên suốt.
+- I realized that we can't just use the latent space from normal AE to feed to
+  GRU. As this latent space won't keep the information related to how severity
+  of one engine, this leads to GRU is unusable
+- The solution is that we use Physicals Informed AE, which divided into 2 linear
+  branch created by X where X is *sensor measurement* and using W as *Operational
+  Conditions* to create $\hat{W}$
+-
 
-- Tính bất biến theo vị trí (translation invariance) — lợi ích thực sự cho bài
-  toán suy thoái. Vì kernel dùng chung cho mọi vị trí, Conv1D nhận diện được
-  một pattern cụ thể (ví dụ một cú tăng đột biến rung động) bất kể nó xảy ra ở
-  cycle nào trong window — window bắt đầu suy thoái ở cycle thứ 3 hay cycle thứ
-  20 của chính nó đều được nhận diện như nhau. Dense thuần không có tính chất
-  này — nó học riêng biệt cho từng vị trí, nên cùng một pattern xuất hiện ở vị
-  trí khác sẽ bị coi là "chưa từng thấy".
-
-- So với LSTM-AE (ý tưởng ban đầu bạn từng đề xuất) — xử lý song song, nhanh
-  hơn, và đã có bằng chứng thực nghiệm ủng hộ cho đúng bối cảnh công nghiệp.
-  LSTM phải xử lý tuần tự từng cycle một (cycle 2 phải đợi cycle 1 xử lý xong),
-  trong khi Conv1D tính đồng thời mọi vị trí trong window — nhanh hơn đáng kể
-  khi window đã cố định độ dài ngắn (30 cycle, không cần mô hình phụ thuộc rất
-  dài như GRU-hazard ở Phase II phải làm). Đây cũng chính là kỹ thuật được xác
-  nhận tốt trong nghiên cứu công nghiệp đã tìm trước đó: temporal convolutional
-  autoencoder đạt hiệu năng ổn định nhất so với Isolation Forest khi mô hình
-  hóa động lực học không tuần hoàn, đa quy mô trong dữ liệu thật — không phải
-  lựa chọn ngẫu nhiên, mà có tiền lệ cụ thể trong đúng loại bài toán industrial
-  anomaly detection.
 *** Purpose
 - Focus more on individual ... therefore, we can pass the
   [[id:02d9a1e7-298a-4b19-b436-dbc871a6ed3c][The data isn't avaiable]] problem
 - Its purpose is like a sensor which will measure the anomaly which are mainly
   affect how an engine work.
-** Data Generator
+** Data Generator (maybe)
 ** Transition Phase
 - Recognize if the quantity and quality of current cluster to move on to next phase
 - Is it enough for quantity of engine?
@@ -288,7 +272,9 @@ $$\text{Loss}_t = -[y_t \log(\hat{y}_t) + (1 - y_t) \log(1 - \hat{y}_t)]$$
 
 * TODO
 ** Code pipeline
-*** [ ] Training for Conv1d AE + GRU hazard
+*** [ ] Simulation data (Minh is doing that)
+*** [ ] Training for Smart-Conv1dAE (im doing that)
+*** [ ] Prepare window for inference real-time
 *** [ ] Adding VAE (fault index )
 *** [ ] Transition Phase
 *** [ ] Inference for I & II
