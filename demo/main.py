@@ -23,7 +23,7 @@ config = SplitConfig(
 
     rare_fault_probability=0.20,
     rare_fault_max_duration=10,
-    rare_fault_max_start_before_cutoff=20,
+    rare_fault_start_cycle_min=60,
     rare_fault_magnitude_min=0.03,
     rare_fault_magnitude_max=0.10,
     rare_fault_types=(
