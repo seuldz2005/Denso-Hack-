@@ -57,9 +57,13 @@ estimates without quantifying the uncertainty (Peng et al., 2019) This work
 presents a model that shows it is capable of state-of-the-art performance while
 quantifying the uncertainty.
 ** Reality Facts
-:PROPERTIES:
-:ID:       39cbe103-698a-40f6-b1ec-f81f31628150
-:END:
+- So we can interpret Denso's demand like this : they will provide us "healthy
+  phase's data" as input and i will understand it as the data just before the
+  maintenance occur. But this can still be understand as 2 ways. First is the
+  data is pure healthy's data, not even a degradation's symstom appear, but this
+  is unreal as reality with noise and this should be a waste to applied in real
+  world. Second is that it is the optimal choice - the point between the pure
+  healthy's data and the point with risk.
 
 *** The data is not that beautiful ...
 - In reality, we can't just let the machine broken down just to get the data but
