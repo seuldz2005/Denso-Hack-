@@ -1,89 +1,169 @@
 """
-train.py -- huấn luyện AE + trích xuất latent cho Phase II.
+train.py -- huấn luyện Smart AE + trích xuất latent cho Phase II.
+Cập nhật theo kiến trúc đơn giản hóa (model.py/loss.py mới): model nhận
+thêm W làm input cho decoder, không còn nhánh/loss dự đoán Ŵ.
 
-Hai hàm chính, đúng ranh giới đã thống nhất với Phase II:
-  - run_training(): CHỈ train AE, không biết gì về GRU-hazard.
-  - extract_latents_for_engine(): chạy encoder ĐÃ ĐÓNG BĂNG, cắt window
-    theo đúng ranh giới BIN (khác stride lúc train), trả về latent_seq
-    sẵn sàng nhét thẳng vào phase2.data.EngineRecord.
-
-File này không xác định healthy region, không split train/test và không
-fit normalization. Các bước đó được xử lý trước khi gọi các hàm ở đây.
+THAY ĐỔI SO VỚI BẢN TRƯỚC:
+  - model(x, w) -- giờ BẮT BUỘC truyền w khi gọi model, ở cả train lẫn
+    extract_latents_for_engine (dù ở bước sau w không thực sự cần thiết
+    cho mục đích cuối, model vẫn yêu cầu đủ tham số để forward chạy được
+    vì decode() luôn cần w).
+  - forward() trả về (x_hat, z) -- 2 giá trị, không phải 3.
+  - smart_ae_loss không còn tham số w_hat/w_true/lambda_w.
+  - epoch_losses không còn key "w_pred".
 """
 
 import numpy as np
 import torch
-from torch.utils.data import TensorDataset, DataLoader
 
-from src.phaseI.core.data import cut_windows
-from src.phaseI.core.model import Conv1DAutoencoder
-from src.phaseI.core.loss import reconstruction_loss
+from windowing import EngineData, WindowBatch, cut_windows_for_engine, concat_window_batches
+from model import SmartConv1DAutoencoder
+from loss import smart_ae_loss
 
 
-def run_training(training_windows: np.ndarray, n_sensors: int, window_len: int,
-                 latent_dim: int = 16, n_epochs: int = 30, lr: float = 1e-3,
-                 batch_size: int = 64, seed: int = 0, device: str = "cpu") -> Conv1DAutoencoder:
+def _build_same_engine_mask(unit_number: np.ndarray) -> torch.Tensor:
+    """Không đổi so với bản trước."""
+    same = unit_number[1:] == unit_number[:-1]
+    return torch.from_numpy(same)
+
+
+def _prepare_epoch_batches(engines: list[EngineData], window_len: int, stride: int,
+                            engines_per_batch: int, rng: np.random.Generator) -> list[WindowBatch]:
+    """Không đổi so với bản trước."""
+    order = rng.permutation(len(engines))
+    batches = []
+    for i in range(0, len(order), engines_per_batch):
+        group_idx = order[i:i + engines_per_batch]
+        group_windows = [cut_windows_for_engine(engines[j], window_len, stride) for j in group_idx]
+        group_windows = [w for w in group_windows if w.X.shape[0] > 0]
+        if not group_windows:
+            continue
+        merged = concat_window_batches(group_windows)
+        sort_idx = np.lexsort((merged.cycle, merged.unit_number))
+        batches.append(WindowBatch(
+            X=merged.X[sort_idx], W=merged.W[sort_idx],
+            unit_number=merged.unit_number[sort_idx], cycle=merged.cycle[sort_idx],
+        ))
+    return batches
+
+
+@torch.no_grad()
+def _evaluate(model: SmartConv1DAutoencoder, engines: list[EngineData], window_len: int,
+              stride: int, engines_per_batch: int, device: str,
+              lambda_smooth: float, lambda_mono: float,
+              rng: np.random.Generator) -> float:
+    """model(x, w) -- giờ cần truyền cả w. smart_ae_loss không còn nhận
+    w_hat/w_true/lambda_w."""
+    model.eval()
+    batches = _prepare_epoch_batches(engines, window_len, stride, engines_per_batch, rng)
+    total_loss = 0.0
+    n_batches = 0
+    for batch in batches:
+        x = torch.from_numpy(batch.X).float().to(device)
+        w = torch.from_numpy(batch.W).float().to(device)
+        mask = _build_same_engine_mask(batch.unit_number).to(device)
+        x_hat, z = model(x, w)
+        losses = smart_ae_loss(x_hat=x_hat, x=x, z_seq=z, same_engine_mask=mask,
+                                lambda_smooth=lambda_smooth, lambda_mono=lambda_mono)
+        total_loss += losses["total"].item()
+        n_batches += 1
+    return total_loss / max(n_batches, 1)
+
+
+def run_training(engines: list[EngineData], n_sensors: int, w_dim: int, window_len: int,
+                  val_engines: list[EngineData] | None = None,
+                  stride: int = 1, z_dim: int = 8, n_epochs: int = 50, lr: float = 1e-3,
+                  engines_per_batch: int = 8, seed: int = 0, device: str = "cpu",
+                  lambda_smooth: float = 1.0, lambda_mono: float = 1.0,
+                  patience: int = 5, min_delta: float = 1e-5) -> SmartConv1DAutoencoder:
     """
-    training_windows: (n_windows, window_len, n_sensors) -- các window đã
-    được chuẩn bị từ DEVELOPMENT data sau bước split/truncation và
-    normalization.
-
-    Trả về model đã train xong -- người gọi tự quyết định .eval() +
-    torch.no_grad() / đóng băng tham số ở bước sau, hàm này không tự làm
-    thay để giữ trách nhiệm rõ ràng.
+    Không còn lambda_w -- không còn loss nào liên quan tới việc dự đoán W.
+    Mọi tham số khác giữ nguyên ý nghĩa như bản trước.
     """
     torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    val_rng = np.random.default_rng(seed + 1)
 
-    x = torch.from_numpy(training_windows).float()
-    loader = DataLoader(TensorDataset(x), batch_size=batch_size, shuffle=True)
-
-    model = Conv1DAutoencoder(n_sensors=n_sensors, window_len=window_len,
-                               latent_dim=latent_dim).to(device)
+    model = SmartConv1DAutoencoder(n_sensors=n_sensors, window_len=window_len,
+                                    w_dim=w_dim, z_dim=z_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    best_val_loss = float("inf")
+    epochs_without_improvement = 0
+    best_state = None
 
     for epoch in range(n_epochs):
         model.train()
-        epoch_loss = 0.0
+        batches = _prepare_epoch_batches(engines, window_len, stride, engines_per_batch, rng)
+        epoch_losses = {"total": 0.0, "recon": 0.0, "smooth": 0.0, "mono": 0.0}
         n_batches = 0
 
-        for (batch,) in loader:
-            batch = batch.to(device)
+        for batch in batches:
+            x = torch.from_numpy(batch.X).float().to(device)
+            w = torch.from_numpy(batch.W).float().to(device)
+            mask = _build_same_engine_mask(batch.unit_number).to(device)
+
             optimizer.zero_grad()
-            x_hat, _ = model(batch)
-            loss = reconstruction_loss(x_hat, batch)
-            loss.backward()
+            x_hat, z = model(x, w)
+            losses = smart_ae_loss(x_hat=x_hat, x=x, z_seq=z, same_engine_mask=mask,
+                                    lambda_smooth=lambda_smooth, lambda_mono=lambda_mono)
+            losses["total"].backward()
             optimizer.step()
 
-            epoch_loss += loss.item()
+            for k in epoch_losses:
+                epoch_losses[k] += losses[k].item()
             n_batches += 1
 
-        print(f"epoch {epoch:3d} | recon_loss={epoch_loss / n_batches:.6f}")
+        log = " | ".join(f"{k}={v / max(n_batches, 1):.6f}" for k, v in epoch_losses.items())
+
+        if val_engines is not None:
+            val_loss = _evaluate(model, val_engines, window_len, stride, engines_per_batch,
+                                  device, lambda_smooth, lambda_mono, val_rng)
+            print(f"epoch {epoch:3d} | {log} | val_total={val_loss:.6f}")
+
+            if best_val_loss - val_loss > min_delta:
+                best_val_loss = val_loss
+                epochs_without_improvement = 0
+                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= patience:
+                print(f"Early stopping tại epoch {epoch} "
+                      f"(val loss không cải thiện {patience} epoch liên tiếp).")
+                break
+        else:
+            print(f"epoch {epoch:3d} | {log}")
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     return model
 
 
 @torch.no_grad()
-def extract_latents_for_engine(model: Conv1DAutoencoder, series: np.ndarray,
+def extract_latents_for_engine(model: SmartConv1DAutoencoder, engine: EngineData,
                                 window_len: int, bin_stride: int,
-                                device: str = "cpu") -> np.ndarray:
+                                device: str = "cpu") -> WindowBatch:
     """
-    series: (n_cycles, n_sensors) đã chuẩn hóa bằng đúng NormalizationStats
-    được fit từ DEVELOPMENT/TRAINING data -- của MỘT engine.
-
-    bin_stride: khoảng cách giữa các bin (ví dụ 10 cycle/bin) -- ĐÂY LÀ
-    THAM SỐ QUYẾT ĐỊNH cách lấy các window cho Phase II, khác hẳn stride
-    nhỏ dùng lúc train AE.
-
-    Trả về latent_seq: (n_bins, latent_dim) -- đúng format
-    EngineRecord.latent_seq mà phase2/data.py cần.
+    Trả về WindowBatch với field X THAY BẰNG Z. Field W giờ là W THẬT
+    (không còn là Ŵ dự đoán như bản trước, vì model không còn sinh ra
+    Ŵ nào cả) -- giữ nguyên nguyên trạng windows.W, không qua model.
     """
     model.eval()
-    windows = cut_windows(series, window_len=window_len, stride=bin_stride)
+    windows = cut_windows_for_engine(engine, window_len=window_len, stride=bin_stride)
 
-    if windows.shape[0] == 0:
-        return np.empty((0, model.latent_dim), dtype=np.float32)
+    if windows.X.shape[0] == 0:
+        return WindowBatch(
+            X=np.empty((0, model.z_dim), dtype=np.float32),
+            W=windows.W, unit_number=windows.unit_number, cycle=windows.cycle,
+        )
 
-    x = torch.from_numpy(windows).float().to(device)
-    _, z = model(x)
+    x = torch.from_numpy(windows.X).float().to(device)
+    w = torch.from_numpy(windows.W).float().to(device)
+    _, z = model(x, w)
 
-    return z.cpu().numpy()
+    return WindowBatch(
+        X=z.cpu().numpy(), W=windows.W,
+        unit_number=windows.unit_number, cycle=windows.cycle,
+    )

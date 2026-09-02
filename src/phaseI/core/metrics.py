@@ -1,15 +1,18 @@
 """
-metrics.py -- đo lường và kiểm chứng cho Phase I.
+metrics.py -- đo lường và kiểm chứng cho Smart AE (Phase I). Thay thế
+bản metrics.py cũ.
 
-Ba việc tách bạch:
-  1. Tính reconstruction error thô (per-window, per-sensor-aware).
-  2. Suy ra DP (Degradation Point) từ chuỗi error, với quy tắc "N window
-     liên tiếp vượt ngưỡng mới tính" đã thống nhất, tránh báo động giả vì
-     nhiễu một điểm.
-  3. Kiểm chứng bằng Spearman correlation với RUL thật -- CHỈ dùng được
-     trên C-MAPSS (có ground truth), không dùng được trên dữ liệu DENSO
-     thật (xem lại: Silhouette Score mới là công cụ giám sát không cần
-     nhãn cho giai đoạn triển khai thật).
+THAY ĐỔI QUAN TRỌNG SO VỚI BẢN CŨ: vì Smart AE train trên TOÀN BỘ
+trajectory (không chỉ healthy), reconstruction error KHÔNG CÒN tăng lên
+ở đoạn suy thoái như bản AE cũ -- model đã học tái tạo tốt cả 2 loại
+pattern (đó chính xác là điều loss function được tối ưu để đạt được).
+Tín hiệu phát hiện event_bin giờ CHUYỂN SANG độ trôi của Z so với
+baseline lúc mới bắt đầu theo dõi mỗi engine (xem z_drift_per_engine).
+
+reconstruction_error vẫn giữ lại như tín hiệu PHỤ: nếu error tăng đột
+biến dù đã train full trajectory, đó có thể là dấu hiệu 1 kiểu lỗi hoàn
+toàn mới (novelty), chưa từng có trong tập train -- không còn là công
+cụ chính để định vị event_bin nữa.
 """
 
 import numpy as np
@@ -17,50 +20,72 @@ import torch
 
 
 @torch.no_grad()
-def reconstruction_error_per_window(model, windows: torch.Tensor,
-                                     condition: torch.Tensor | None = None,
+def reconstruction_error_per_window(model, windows: torch.Tensor, w: torch.Tensor,
                                      per_sensor_normalize: np.ndarray | None = None) -> np.ndarray:
     """
     windows: (n_windows, window_len, n_sensors)
-    per_sensor_normalize: std của error từng sensor (tính từ vùng khỏe mạnh),
-        dùng để chuẩn hóa error trước khi cộng gộp -- tránh một vài sensor
-        phương sai cao lấn át toàn bộ error tổng, đúng rủi ro đã cảnh báo
-        khi thiết kế pipeline AE.
+    w: (n_windows, w_dim) -- W THẬT, giờ BẮT BUỘC vì decoder cần nó để
+        tái tạo X (kiến trúc mới không còn Ŵ dự đoán -- xem model.py).
+    per_sensor_normalize: std của error từng sensor (tính từ vùng khỏe
+        mạnh nếu có), dùng để chuẩn hóa error trước khi cộng gộp.
 
-    Trả về (n_windows,) -- một số error tổng hợp cho mỗi window.
+    Trả về (n_windows,) -- tín hiệu PHỤ (novelty detection), xem
+    docstring đầu file. KHÔNG còn là tín hiệu chính để tìm event_bin.
     """
     model.eval()
-    x_hat, _ = model(windows, condition)
-    err = (x_hat - windows) ** 2                     # (n_windows, window_len, n_sensors)
-    err = err.mean(dim=1)                              # gộp theo thời gian -> (n_windows, n_sensors)
+    x_hat, _ = model(windows, w)                          # LƯU Ý: 2 giá trị trả về + cần truyền w, khác bản cũ
+    err = (x_hat - windows) ** 2                          # (n_windows, window_len, n_sensors)
+    err = err.mean(dim=1)                                   # gộp theo thời gian -> (n_windows, n_sensors)
     err = err.cpu().numpy()
 
     if per_sensor_normalize is not None:
         err = err / np.where(per_sensor_normalize == 0, 1.0, per_sensor_normalize)
 
-    return err.mean(axis=1)                             # gộp theo sensor -> (n_windows,)
+    return err.mean(axis=1)                                  # gộp theo sensor -> (n_windows,)
 
 
-def fit_threshold(healthy_errors: np.ndarray, percentile: float = 95.0) -> float:
-    """Ngưỡng lấy từ chính phân phối error trên vùng khỏe mạnh (không phải
-    một số tùy ý) -- percentile 95 nghĩa là chấp nhận 5% false positive
-    ngay trên chính dữ liệu train, một điểm khởi đầu hợp lý để tinh chỉnh
-    sau khi có dữ liệu thật."""
-    return float(np.percentile(healthy_errors, percentile))
+def z_drift_per_engine(z_seq: np.ndarray, n_baseline_bins: int = 5) -> np.ndarray:
+    """
+    z_seq: (n_bins, z_dim) -- CỦA 1 ENGINE, đã sắp theo cycle tăng dần
+    (chính là field .X trong kết quả trả về của
+    train.extract_latents_for_engine -- lưu ý field đó thực chất là Z).
+
+    n_baseline_bins: số bin ĐẦU TIÊN dùng để ước lượng baseline "gần
+    như chắc chắn khỏe". Đây là GIẢ ĐỊNH NỚI LỎNG -- sai lệch nhẹ ở đây
+    (ví dụ vài bin đầu thực ra đã hơi suy thoái) chỉ ảnh hưởng ngưỡng,
+    KHÔNG ảnh hưởng việc model học, khác hẳn rủi ro của việc xác định
+    healthy-region để làm ranh giới TRAIN ở bản pipeline cũ.
+
+    Trả về (n_bins,) -- khoảng cách Euclid từ mỗi bin tới baseline. Đây
+    là TÍN HIỆU CHÍNH thay thế reconstruction_error để tìm event_bin.
+    """
+    n_baseline_bins = min(n_baseline_bins, z_seq.shape[0])
+    baseline = z_seq[:n_baseline_bins].mean(axis=0)         # (z_dim,)
+    return np.linalg.norm(z_seq - baseline, axis=-1)          # (n_bins,)
 
 
-def find_degradation_point(error_sequence: np.ndarray, threshold: float,
+def fit_threshold(healthy_signal: np.ndarray, percentile: float = 95.0) -> float:
+    """Không đổi logic so với bản cũ -- percentile 95 nghĩa là chấp
+    nhận 5% false positive ngay trên chính dữ liệu tham chiếu. Giờ
+    thường nhận z_drift thay vì reconstruction error làm input."""
+    return float(np.percentile(healthy_signal, percentile))
+
+
+def find_degradation_point(signal: np.ndarray, threshold: float,
                             n_consecutive: int = 3) -> int | None:
     """
-    error_sequence: (T,) đã làm mượt (nên EWMA/moving-average trước khi
-    gọi hàm này -- xem smooth_errors bên dưới).
+    signal: (T,) đã làm mượt (nên EWMA/moving-average trước khi gọi --
+    xem smooth_signal bên dưới). Không đổi logic so với bản cũ, chỉ đổi
+    tên tham số cho tổng quát (không còn gắn chặt với "error").
 
-    Trả về index đầu tiên mà error vượt ngưỡng LIÊN TỤC ít nhất
-    n_consecutive lần -- tránh gán DP chỉ vì một điểm nhiễu tức thời.
-    Trả về None nếu chưa bao giờ đạt điều kiện này (engine vẫn khỏe mạnh
-    trong toàn bộ đoạn quan sát được).
+    Trả về index đầu tiên mà signal vượt ngưỡng LIÊN TỤC ít nhất
+    n_consecutive lần. Trả về None nếu chưa bao giờ đạt điều kiện này.
+
+    LƯU Ý: index trả về là index trong mảng signal/z_seq (theo bin_stride
+    lúc extract_latents_for_engine), KHÔNG phải cycle thật -- dùng mảng
+    .cycle đi kèm (từ WindowBatch) để convert: DP_cycle_that = cycle[DP_index].
     """
-    above = error_sequence > threshold
+    above = signal > threshold
     run_length = 0
     for i, flag in enumerate(above):
         run_length = run_length + 1 if flag else 0
@@ -69,22 +94,22 @@ def find_degradation_point(error_sequence: np.ndarray, threshold: float,
     return None
 
 
-def smooth_errors(error_sequence: np.ndarray, alpha: float = 0.3) -> np.ndarray:
-    """EWMA đơn giản, không phụ thuộc thư viện ngoài."""
-    smoothed = np.empty_like(error_sequence)
-    smoothed[0] = error_sequence[0]
-    for i in range(1, len(error_sequence)):
-        smoothed[i] = alpha * error_sequence[i] + (1 - alpha) * smoothed[i - 1]
+def smooth_signal(signal: np.ndarray, alpha: float = 0.3) -> np.ndarray:
+    """EWMA đơn giản, không phụ thuộc thư viện ngoài. Đổi tên từ
+    smooth_errors -> smooth_signal (tổng quát, không gắn chặt error)."""
+    smoothed = np.empty_like(signal)
+    smoothed[0] = signal[0]
+    for i in range(1, len(signal)):
+        smoothed[i] = alpha * signal[i] + (1 - alpha) * smoothed[i - 1]
     return smoothed
 
 
-def spearman_validation(errors: np.ndarray, true_rul: np.ndarray) -> float:
+def spearman_validation(signal: np.ndarray, true_rul: np.ndarray) -> float:
     """
-    CHỈ dùng trên C-MAPSS (hoặc bất kỳ dataset nào có RUL thật). Trả về hệ
-    số tương quan Spearman -- kỳ vọng ÂM MẠNH (error cao khi RUL thấp).
-    Đây là cổng kiểm tra đầu tiên, bắt buộc phải làm trước khi tin tưởng
-    bất kỳ bước nào sau đó trong pipeline AE.
+    CHỈ dùng trên C-MAPSS (hoặc bất kỳ dataset nào có RUL thật). Trả về
+    hệ số tương quan Spearman -- kỳ vọng ÂM MẠNH (signal cao khi RUL
+    thấp). Không đổi logic so với bản cũ.
     """
     from scipy.stats import spearmanr
-    corr, _ = spearmanr(errors, true_rul)
+    corr, _ = spearmanr(signal, true_rul)
     return float(corr)
